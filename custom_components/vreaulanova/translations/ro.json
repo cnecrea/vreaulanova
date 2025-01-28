@@ -1,0 +1,28 @@
+    {
+        "config": {
+        "step": {
+            "user": {
+            "title": "Configurare pentru Nova Power & Gas",
+            "description": "Introduceți detaliile contului pentru autentificare.",
+            "data": {
+                "email": "Nume de utilizator / Email",
+                "password": "Parolă",
+                "update_interval": "Interval de actualizare (în minute)"
+            }
+            }
+        },
+        "error": {
+            "auth_failed": "Autentificare eșuată. Verificați datele introduse."
+        }
+        },
+        "options": {
+        "step": {
+            "init": {
+            "title": "Modificați opțiunile pentru Nova Power & Gas",
+            "data": {
+                "update_interval": "Interval de actualizare (în minute)"
+            }
+            }
+        }
+        }
+    }
