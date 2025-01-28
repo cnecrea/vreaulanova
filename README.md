@@ -48,8 +48,6 @@ Această integrare permite monitorizarea detaliată a datelor contractuale dispo
 
 ---
 
----
-
 ## 🚀 Instalare
 
 ### 💡 Instalare prin HACS:
