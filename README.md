@@ -1,4 +1,4 @@
-![icon](https://github.com/user-attachments/assets/b0b1a685-252e-4866-89bf-0526fac954d2)
+![logo](https://github.com/user-attachments/assets/dcbb160f-adbb-403b-9a0b-bfd650c5ccb9)
 
 
 # Nova Power & Gas - Integrare pentru Home Assistant 🏠🇷🇴
