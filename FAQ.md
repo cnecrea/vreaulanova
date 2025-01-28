@@ -3,6 +3,7 @@
 <a name="top"></a>
 # Întrebări frecvente
 - [Cum să adaug integrarea în Home Assistant?](#cum-să-adaug-integrarea-în-home-assistant)
+- [Observ în loguri "Eroare de excepție la login: HTTPSConnectionPool". De ce?](#observ-în-loguri-eroare-de-excepție-la-login-httpsconnectionpool-de-ce)
 
 
 ## Cum să adaug integrarea în Home Assistant?
@@ -45,3 +46,35 @@ HACS (Home Assistant Community Store) permite instalarea și gestionarea integr�
 > **Notă:** 
 > Asigură-te că Home Assistant și HACS sunt actualizate la cea mai recentă versiune pentru a evita erorile de compatibilitate.
 
+---
+
+## Observ în loguri "Eroare de excepție la login: HTTPSConnectionPool". De ce?
+
+Pentru a reveni la începutul paginii, [apăsați aici](#top).
+
+
+**Răspuns:**  
+Eroarea „Eroare de excepție la login: HTTPSConnectionPool” apare din cauza unei probleme de conexiune între Home Assistant și serverul Nova Power & Gas. Aceasta NU este cauzată de integrare, ci de factori externi. Iată posibilele motive și soluții:
+
+  - **1. Probleme de rețea**
+      - Serverul Nova Power & Gas nu poate fi contactat din cauza unei conexiuni instabile.
+      - Verifică dacă dispozitivul care rulează Home Assistant are o conexiune la internet.
+      - Asigură-te că nicio regulă de firewall nu blochează accesul.
+
+  - **2. Serverul Nova Power & Gas este offline**
+      - Este posibil ca serverul să fie temporar indisponibil sau să fie în mentenanță.
+      - Încearcă din nou peste câteva ore.
+
+  - **3. Certificat SSL invalid**
+      - Serverul API ar putea folosi un certificat SSL expirat sau invalid, ceea ce blochează conexiunea.
+      - Aceasta este o problemă de partea furnizorului Nova Power & Gas.
+
+
+---
+
+### Ce trebuie să faci:
+1. Verifică conexiunea la internet și firewall-ul.
+2. Încearcă să accesezi manual serverul API pentru a confirma că este disponibil.
+3. Dacă problema persistă, contactează furnizorul Nova Power & Gas și informează-i despre eroarea apărută.
+
+Această problemă nu ține de integrarea în Home Assistant, ci de conectivitatea către serverul furnizorului.
