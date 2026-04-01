@@ -1,0 +1,73 @@
+{
+  "title": "Nova Power & Gas",
+
+  "config": {
+    "flow_title": "Nova Power & Gas",
+
+    "step": {
+      "user": {
+        "title": "Conectare la contul Nova Power & Gas",
+        "description": "Introduceți adresa de email și parola contului Nova Power & Gas.",
+        "data": {
+          "username": "Adresă de email",
+          "password": "Parolă",
+          "update_interval": "Interval de actualizare (secunde)"
+        }
+      }
+    },
+
+    "error": {
+      "auth_failed": "Autentificare eșuată. Verificați adresa de email și parola.",
+      "no_data": "Autentificare reușită, dar nu au fost găsite date asociate acestui cont."
+    },
+
+    "abort": {
+      "already_configured": "Acest cont Nova Power & Gas este deja configurat."
+    }
+  },
+
+  "options": {
+    "flow_title": "Setări Nova Power & Gas",
+
+    "step": {
+      "init": {
+        "title": "Setări Nova Power & Gas",
+        "description": "Selectează categoria de gestionat",
+        "menu_options": {
+          "settings": "Setări cont",
+          "licenta": "Licență"
+        }
+      },
+
+      "settings": {
+        "title": "Setări cont",
+        "description": "Actualizați credențialele și intervalul de actualizare.",
+        "data": {
+          "username": "Adresă de email",
+          "password": "Parolă",
+          "update_interval": "Interval de actualizare (secunde)"
+        }
+      },
+
+      "licenta": {
+        "title": "Licență Nova Power & Gas",
+        "description": "{license_status}\n\nIntrodu cheia de licență pentru a activa sau reînnoi integrarea.",
+        "data": {
+          "license_key": "Cheie de licență"
+        }
+      }
+    },
+
+    "error": {
+      "auth_failed": "Autentificare eșuată cu credențialele introduse.",
+      "no_data": "Nu au fost găsite date asociate acestui cont.",
+      "license_key_empty": "Introdu o cheie de licență.",
+      "license_key_invalid": "Cheie de licență invalidă. Verifică formatul și încearcă din nou.",
+      "license_already_used": "Această cheie de licență a fost deja folosită pe altă instalare.",
+      "license_key_expired": "Această cheie de licență a expirat.",
+      "license_fingerprint_mismatch": "Această cheie de licență este asociată altei instalări.",
+      "license_network_error": "Nu se poate conecta la serverul de licențe. Verifică conexiunea la internet.",
+      "license_server_error": "Eroare server licențe. Încearcă din nou mai târziu."
+    }
+  }
+}
