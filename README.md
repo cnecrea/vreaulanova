@@ -25,7 +25,7 @@ Oferă senzori dedicați per cod CRM și per utilitate (gaz / electricitate), so
 - **Arhive** — facturi și plăți pe anul curent, cu sume per intrare și totaluri
 - **Revizie tehnică gaz** — Validă / Expirată / Nedefinit, cu date revizii și verificări
 - **Trimitere autocitiri** — buton per contor care citește din `input_number` și trimite la API
-- **Sistem de licență** — server-side v3.3 cu Ed25519, HMAC-SHA256, grace period; fără licență validă se afișează doar senzorul „Licență necesară"
+- **Sistem de licență** — fără licență validă se afișează doar senzorul „Licență necesară"
 - **Reconfigurare fără reinstalare** — OptionsFlow pentru credențiale și licență
 
 ---
