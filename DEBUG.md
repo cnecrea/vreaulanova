@@ -96,7 +96,7 @@ GET https://backend.nova-energy.ro/api/payments → 200 OK
 GET https://backend.nova-energy.ro/api/metering-points → 200 OK
 GET https://backend.nova-energy.ro/api/invoices → 200 OK
 GET https://backend.nova-energy.ro/api/balances → 200 OK
-[SWITCH] Comutare la contul asociat: CRM=7654321 (ISTRATE IORDANEL).
+[SWITCH] Comutare la contul asociat: CRM=7654321 (IOAN POPESCU).
 POST https://backend.nova-energy.ro/api/accounts/switch → 200 OK
 [VreauLaNova] Fetch cont asociat CRM=7654321.
 GET https://backend.nova-energy.ro/api/metering-points → 200 OK
