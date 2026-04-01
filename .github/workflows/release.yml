@@ -40,7 +40,7 @@ jobs:
             sudo apt-get update && sudo apt-get install -y jq
           fi
 
-          MANIFEST_PATH="custom_components/vreeaulanova/manifest.json"
+          MANIFEST_PATH="custom_components/vreaulanova/manifest.json"
 
           if [ ! -f "$MANIFEST_PATH" ]; then
             echo "Error: manifest.json not found at $MANIFEST_PATH"
@@ -164,11 +164,11 @@ jobs:
         env:
           PAT: ${{ secrets.PAT_TOKEN }}
         run: |
-          git config user.name "vreeaulanova-release-bot"
-          git config user.email "vreeaulanova-bot@users.noreply.github.com"
-          git remote set-url origin https://x-access-token:${PAT}@github.com/cnecrea/vreeaulanova.git
+          git config user.name "vreaulanova-release-bot"
+          git config user.email "vreaulanova-bot@users.noreply.github.com"
+          git remote set-url origin https://x-access-token:${PAT}@github.com/cnecrea/vreaulanova.git
 
-          git add custom_components/vreeaulanova/manifest.json
+          git add custom_components/vreaulanova/manifest.json
           git commit -m "Update version to ${{ env.new_version }}"
           git push origin HEAD
 
@@ -176,8 +176,8 @@ jobs:
       - name: Create ZIP Archive
         run: |
           mkdir -p dist
-          cd custom_components/vreeaulanova
-          zip -r ../../dist/vreeaulanova.zip ./*
+          cd custom_components/vreaulanova
+          zip -r ../../dist/vreaulanova.zip ./*
 
       # 7. Creează release-ul draft cu body generat
       - name: Create GitHub Release
@@ -186,7 +186,7 @@ jobs:
           tag_name: "${{ env.new_version }}"
           name: "${{ env.new_version }}"
           body_path: /tmp/release_body.md
-          files: dist/vreeaulanova.zip
+          files: dist/vreaulanova.zip
           draft: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
