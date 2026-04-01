@@ -827,7 +827,12 @@ class NovaGasRevisionSensor(NovaMPBaseSensor):
         return []
 
     def _find_by_type(self, rev_type: str) -> dict | None:
-        """Găsește revizia/verificarea după tip."""
+        """Găsește revizia/verificarea după tip.
+
+        API-ul Nova returnează revisionType:
+          - "Revision"  → Revizie Tehnică Periodică
+          - "Check"     → Verificare Tehnică Periodică
+        """
         for rev in self._get_revisions():
             if rev.get("revisionType") == rev_type:
                 return rev
@@ -862,19 +867,19 @@ class NovaGasRevisionSensor(NovaMPBaseSensor):
         if not self._license_valid:
             return None
         revision = self._find_by_type("Revision")
-        verification = self._find_by_type("Verification")
+        check = self._find_by_type("Check")
 
         attrs: dict[str, Any] = {}
         attrs["Data ultimei revizii"] = (
-            revision.get("executionDate") if revision else None
+            _format_date_ro(revision.get("executionDate", "")) if revision else "Nedefinit"
         )
         attrs["Data următoarei revizii"] = (
-            revision.get("expirationDate") if revision else None
+            _format_date_ro(revision.get("expirationDate", "")) if revision else "Nedefinit"
         )
         attrs["Data ultimei verificări"] = (
-            verification.get("executionDate") if verification else None
+            _format_date_ro(check.get("executionDate", "")) if check else "Nedefinit"
         )
         attrs["Data următoarei verificări"] = (
-            verification.get("expirationDate") if verification else None
+            _format_date_ro(check.get("expirationDate", "")) if check else "Nedefinit"
         )
         return attrs
