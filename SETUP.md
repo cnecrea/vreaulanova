@@ -10,7 +10,7 @@ Acest ghid acoperă fiecare pas al instalării și configurării integrării Nov
 
 - **Home Assistant** versiunea 2025.11 sau mai nouă (necesită pattern `entry.runtime_data`)
 - **Cont Nova Power & Gas** activ — cu email și parolă funcționale pe platforma [Vreau la Nova](https://nova-energy.ro/)
-- **Licență** validă — de la [hubinteligent.org/licenta/vreaulanova](https://hubinteligent.org/licenta/vreaulanova)
+- **Licență** validă — de la [hubinteligent.org/donate?ref=vreaulanova](https://hubinteligent.org/donate?ref=vreaulanova)
 - **HACS** instalat (opțional, dar recomandat) — [instrucțiuni HACS](https://hacs.xyz/docs/setup/download)
 
 ---
@@ -136,7 +136,7 @@ Pentru a introduce licența:
 3. Introdu cheia de licență
 4. Click **Salvează**
 
-Licențe disponibile la: [hubinteligent.org/licenta/vreaulanova](https://hubinteligent.org/licenta/vreaulanova)
+Licențe disponibile la: [hubinteligent.org/donate?ref=vreaulanova](https://hubinteligent.org/donate?ref=vreaulanova)
 
 ### Pasul 5 — Confirmă
 
