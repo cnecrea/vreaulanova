@@ -87,7 +87,7 @@ Autentificarea se face cu email + parolă (POST JSON). Token-ul JWT expiră la 3
 
 ### Pasul 2 — Licență
 
-Integrarea necesită o licență validă. Poți achiziționa una de la [hubinteligent.org/licenta/vreaulanova](https://hubinteligent.org/licenta/vreaulanova). Licența se introduce din **OptionsFlow** (Setări → Dispozitive și Servicii → Nova Power & Gas → Configurare).
+Integrarea necesită o licență validă. Poți achiziționa una de la [hubinteligent.org/donate?ref=vreaulanova](https://hubinteligent.org/donate?ref=vreaulanova). Licența se introduce din **OptionsFlow** (Setări → Dispozitive și Servicii → Nova Power & Gas → Configurare).
 
 ### Pasul 3 — Descoperire automată conturi
 
@@ -323,7 +323,7 @@ custom_components/vreaulanova/
 - **Home Assistant** 2025.11 sau mai nou (pattern `entry.runtime_data`)
 - **HACS** (opțional, pentru instalare ușoară)
 - **Cont Nova Power & Gas** activ cu email + parolă
-- **Licență** validă — [hubinteligent.org/licenta/vreaulanova](https://hubinteligent.org/licenta/vreaulanova)
+- **Licență** validă — [hubinteligent.org/donate?ref=vreaulanova](https://hubinteligent.org/donate?ref=vreaulanova)
 - **Python**: `cryptography >= 41.0.0` (dependință automată prin manifest)
 
 ---
