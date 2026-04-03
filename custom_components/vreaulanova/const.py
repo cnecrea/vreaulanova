@@ -15,7 +15,7 @@ HEAVY_UPDATE_MULTIPLIER = 6         # Heavy refresh la fiecare al 6-lea ciclu (�
 # ──────────────────────────────────────────────
 CONF_LICENSE_KEY = "license_key"
 LICENSE_DATA_KEY = "vreaulanova_license_manager"
-LICENSE_PURCHASE_URL = "https://hubinteligent.org/licenta/vreaulanova"
+LICENSE_PURCHASE_URL = "https://hubinteligent.org/donate?ref=vreaulanova"
 
 # ──────────────────────────────────────────────
 # Token store (între config_flow și __init__)
