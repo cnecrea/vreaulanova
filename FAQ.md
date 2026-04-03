@@ -220,7 +220,7 @@ actions:
 
 Integrarea folosește un sistem de licențiere server-side (v3.3) cu semnături Ed25519 și HMAC-SHA256. Fără o licență validă, integrarea afișează doar senzorul „Licență necesară" și nu creează senzori sau butoane funcționale.
 
-Licența se achiziționează de la: [hubinteligent.org/licenta/vreaulanova](https://hubinteligent.org/licenta/vreaulanova)
+Licența se achiziționează de la: [hubinteligent.org/donate?ref=vreaulanova](https://hubinteligent.org/donate?ref=vreaulanova)
 
 După achiziție, introdu cheia de licență din OptionsFlow:
 1. **Setări** → **Dispozitive și Servicii** → **Nova Power & Gas** → **Configurare**
