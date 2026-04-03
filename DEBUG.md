@@ -252,7 +252,7 @@ INFO  [VreauLaNova] Se creează 19 senzori pentru 2 conturi.
 
 **Rezolvare**:
 1. Verifică cheia de licență în OptionsFlow
-2. Dacă a expirat, reînnoiește de la [hubinteligent.org/licenta/vreaulanova](https://hubinteligent.org/licenta/vreaulanova)
+2. Dacă a expirat, reînnoiește de la [hubinteligent.org/donate?ref=vreaulanova](https://hubinteligent.org/donate?ref=vreaulanova)
 3. Dacă serverul nu e accesibil, există un grace period — licența rămâne validă temporar
 
 ### Eroare la trimitere autocitire
