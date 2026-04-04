@@ -168,7 +168,11 @@
           "vizite": 1,
           "vizitatori_unici": 1
         }
-      ]
+      ],
+      "clones_total": 166,
+      "clones_unice": 45,
+      "views_total": 4,
+      "views_unice": 3
     },
     "2026-04-04": {
       "stars": 2,
@@ -178,8 +182,8 @@
       "referrers": [
         {
           "sursa": "github.com",
-          "vizite": 20,
-          "vizitatori_unici": 14
+          "vizite": 22,
+          "vizitatori_unici": 16
         },
         {
           "sursa": "lm.facebook.com",
@@ -210,5 +214,5 @@
     "1.1.0": 1,
     "1.0.0": 0
   },
-  "ultima_actualizare": "2026-04-04T06:51:27Z"
+  "ultima_actualizare": "2026-04-04T18:27:52Z"
 }
