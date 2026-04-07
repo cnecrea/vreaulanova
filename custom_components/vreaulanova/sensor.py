@@ -1,21 +1,32 @@
 """Platforma Sensor pentru Nova Power & Gas (Vreau la Nova).
 
+Arhitectura v1.1 — PER LOC DE CONSUM (metering point):
+
+  Un cont CRM poate avea MULTIPLE locuri de consum de același tip de utilitate.
+  Exemplu: CRM 6085537 → 2 puncte de măsurare gaz, la 2 adrese diferite.
+
+Device-uri: un device per CRM per metering point.
+  - Nova Power & Gas (6085537) LC-00202600 Gaz
+  - Nova Power & Gas (6085537) LC-00202592 Gaz
+  - Nova Power & Gas (3047398) LC-00123456 Energie Electrică
+
 Pattern entity_id:
-  - Per utilitate:   sensor.{DOMAIN}_{crm}_{ut_short}_{suffix}
-  - Per contor:      sensor.{DOMAIN}_{crm}_{ut_short}_{suffix}_{series}
+  - Per MP:    sensor.{DOMAIN}_{crm}_{mp_slug}_{suffix}
+  - Per meter: sensor.{DOMAIN}_{crm}_{mp_slug}_index_contor_{series}
 
-TOȚI senzorii sunt per utilitate — apar sub fiecare device separat.
-Pattern 1:1 cu eonromania: _attr_has_entity_name = False, custom entity_id property.
+  mp_slug = numărul locului de consum (LC-00202600 → lc00202600)
 
-Device-uri: un serviciu per CRM per utilitate.
-  - Nova Power & Gas (3008726) Gaz
-  - Nova Power & Gas (3047398) Gaz
-  - Nova Power & Gas (3047398) Energie Electrică
+Senzori nivel cont (GLOBAL — sub FIECARE device LC):
+  - Sold total, Sold prosumator, Citire permisă, Arhivă plăți
+
+Senzori per loc de consum (1 per MP):
+  - Date contract, Convenție consum, Factură restantă
+  - Arhivă facturi, Revizie tehnică gaz
+  - Index contor (per meter din MP)
 
 Conform STANDARD-LICENTA.md:
 - Licență invalidă → doar LicentaNecesaraSensor
 - Licență validă → cleanup LicentaNecesaraSensor + senzori normali
-- Fiecare senzor are _license_valid property real-time
 """
 
 import logging
@@ -82,11 +93,25 @@ def _utility_api_type(ut_short: str) -> str:
     return ut_short
 
 
-def _utility_device(crm: str, ut_short: str, ut_label: str) -> DeviceInfo:
-    """Device info per CRM per utilitate — un serviciu per utilitate."""
+def _mp_slug(mp: dict) -> str:
+    """Generează un slug unic din numărul locului de consum.
+
+    LC-00202600 → lc00202600  (folosit în entity_id și device identifier)
+    """
+    number = mp.get("number", "") or mp.get("meteringPointId", "")[:12]
+    return number.lower().replace("-", "").replace(" ", "")
+
+
+def _mp_device(crm: str, mp: dict) -> DeviceInfo:
+    """Device info per CRM per loc de consum (metering point).
+
+    Exemplu: Nova Power & Gas (6085537) LC-00202600 Gaz
+    """
+    mp_number = mp.get("number", "?")
+    ut_label = _utility_label(mp)
     return DeviceInfo(
-        identifiers={(DOMAIN, f"account_{crm}_{ut_short}")},
-        name=f"Nova Power & Gas ({crm}) {ut_label}",
+        identifiers={(DOMAIN, f"mp_{crm}_{_mp_slug(mp)}")},
+        name=f"Nova Power & Gas ({crm}) {mp_number} {ut_label}",
         manufacturer="Ciprian Nicolae (cnecrea)",
         model="Nova Power & Gas",
         entry_type=DeviceEntryType.SERVICE,
@@ -111,20 +136,17 @@ def _unit_for_utility(mp: dict, meter: dict | None = None) -> str | None:
     return None
 
 
-def _get_first_utility(data: dict, accounts_data: dict | None = None) -> tuple[str, str]:
-    """Extrage prima utilitate din metering_points (fallback: gaz)."""
-    # Caută în accounts_data (multi-account)
+def _get_first_mp(data: dict, accounts_data: dict | None = None) -> dict | None:
+    """Returnează primul metering point din orice cont (pentru fallback)."""
     if accounts_data:
         for acct in accounts_data.values():
             mps = acct.get("metering_points", [])
             if mps:
-                return _utility_short(mps[0]), _utility_label(mps[0])
-    # Fallback: structura veche flat
-    metering_points = data.get("metering_points", [])
-    if metering_points:
-        first_mp = metering_points[0]
-        return _utility_short(first_mp), _utility_label(first_mp)
-    return "gaz", "Gaz"
+                return mps[0]
+    mps = data.get("metering_points", [])
+    if mps:
+        return mps[0]
+    return None
 
 
 # Luni românești (lowercase) — pentru formatarea datelor
@@ -160,7 +182,7 @@ def _format_amount(val) -> str:
 
 
 # ═══════════════════════════════════════════════
-# CLASĂ DE BAZĂ — PATTERN IDENTIC CU EONROMANIA
+# CLASĂ DE BAZĂ — PER LOC DE CONSUM
 # ═══════════════════════════════════════════════
 
 class NovaBaseSensor(CoordinatorEntity[NovaCoordinator], SensorEntity):
@@ -172,13 +194,17 @@ class NovaBaseSensor(CoordinatorEntity[NovaCoordinator], SensorEntity):
         self,
         coordinator: NovaCoordinator,
         crm: str,
-        ut_short: str = "gaz",
-        ut_label: str = "Gaz",
+        mp: dict,
     ) -> None:
         super().__init__(coordinator)
         self._crm = crm
-        self._ut_short = ut_short
-        self._ut_label = ut_label
+        self._mp = mp
+        self._mp_id = mp.get("meteringPointId", "")
+        self._mp_number = mp.get("number", "")
+        self._mp_slug = _mp_slug(mp)
+        self._ut_short = _utility_short(mp)
+        self._ut_label = _utility_label(mp)
+        self._clc_pod = mp.get("specificIdForUtilityType", "")
         self._custom_entity_id: str | None = None
 
     def _account_data(self) -> dict:
@@ -202,7 +228,7 @@ class NovaBaseSensor(CoordinatorEntity[NovaCoordinator], SensorEntity):
 
     @property
     def device_info(self) -> DeviceInfo:
-        return _utility_device(self._crm, self._ut_short, self._ut_label)
+        return _mp_device(self._crm, self._mp)
 
 
 # ═══════════════════════════════════════════════
@@ -219,10 +245,9 @@ class LicentaNecesaraSensor(NovaBaseSensor):
         self,
         coordinator: NovaCoordinator,
         crm: str,
-        ut_short: str = "gaz",
-        ut_label: str = "Gaz",
+        mp: dict,
     ) -> None:
-        super().__init__(coordinator, crm, ut_short, ut_label)
+        super().__init__(coordinator, crm, mp)
         self._attr_name = "Nova Power & Gas"
         self._attr_unique_id = f"{DOMAIN}_licenta_{crm}"
         self._custom_entity_id = f"sensor.{DOMAIN}_{crm}_licenta"
@@ -241,22 +266,6 @@ class LicentaNecesaraSensor(NovaBaseSensor):
 
 
 # ═══════════════════════════════════════════════
-# BAZĂ PER PUNCT DE MĂSURARE
-# ═══════════════════════════════════════════════
-
-class NovaMPBaseSensor(NovaBaseSensor):
-    """Bază pentru senzori per punct de măsurare."""
-
-    def __init__(self, coordinator, crm, mp: dict):
-        ut_short = _utility_short(mp)
-        ut_label = _utility_label(mp)
-        super().__init__(coordinator, crm, ut_short, ut_label)
-        self._mp = mp
-        self._mp_id = mp.get("meteringPointId", "")
-        self._clc_pod = mp.get("specificIdForUtilityType", "")
-
-
-# ═══════════════════════════════════════════════
 # ASYNC_SETUP_ENTRY
 # ═══════════════════════════════════════════════
 
@@ -268,7 +277,8 @@ async def async_setup_entry(
     """Configurează senzorii din config entry.
 
     Iterează prin TOATE conturile (principal + asociate) din accounts_data.
-    TOȚI senzorii sunt per utilitate — apar sub fiecare device (gaz / electricitate).
+    Per fiecare cont, iterează prin TOATE locurile de consum (metering points).
+    Fiecare MP devine un device separat cu senzori proprii.
     """
     coordinator: NovaCoordinator = entry.runtime_data.coordinator
     data = coordinator.data or {}
@@ -293,9 +303,10 @@ async def async_setup_entry(
                     "[VreauLaNova] Senzor orfan eliminat (licență expirată): %s",
                     entry_reg.entity_id,
                 )
-        first_ut_short, first_ut_label = _get_first_utility(data, accounts_data)
+        # Fallback MP
+        fallback_mp = _get_first_mp(data, accounts_data) or {"utilityType": "gas"}
         async_add_entities(
-            [LicentaNecesaraSensor(coordinator, fallback_crm, first_ut_short, first_ut_label)],
+            [LicentaNecesaraSensor(coordinator, fallback_crm, fallback_mp)],
             update_before_add=True,
         )
         return
@@ -320,54 +331,52 @@ async def async_setup_entry(
         is_prosumer = any(c.get("prosumerContract") for c in contracts)
 
         metering_points = acct_data.get("metering_points", [])
-        seen_utilities: set[str] = set()
 
         for mp in metering_points:
-            ut_short = _utility_short(mp)
-            ut_label = _utility_label(mp)
+            slug = _mp_slug(mp)
             utility = mp.get("utilityType", "unknown")
 
-            if ut_short not in seen_utilities:
-                seen_utilities.add(ut_short)
+            # ── Senzori cont-level — GLOBAL: sub FIECARE device LC ──
+            # Unique ID include mp_slug → fiecare device are propriul senzor
+            entities.append(NovaBalanceSensor(coordinator, crm, mp))
+            entities.append(NovaCitirePermisaSensor(coordinator, crm, mp))
+            entities.append(NovaArhivaPlatiSensor(coordinator, crm, mp))
 
-                # ── Senzori cont (duplicați per utilitate, apar sub fiecare device) ──
-                entities.append(NovaBalanceSensor(coordinator, crm, ut_short, ut_label))
-                entities.append(NovaCitirePermisaSensor(coordinator, crm, ut_short, ut_label))
-                entities.append(NovaArhivaPlatiSensor(coordinator, crm, ut_short, ut_label))
+            if is_prosumer:
+                entities.append(NovaBalanceProsumerSensor(coordinator, crm, mp))
 
-                if is_prosumer:
-                    entities.append(NovaBalanceProsumerSensor(coordinator, crm, ut_short, ut_label))
+            # ── Senzori per loc de consum (per fiecare MP) ──
+            entities.append(NovaArhivaFacturiSensor(coordinator, crm, mp))
+            entities.append(NovaDateContractSensor(coordinator, crm, mp))
+            entities.append(NovaConventionCurrentMonthSensor(coordinator, crm, mp))
+            entities.append(NovaFacturaRestantaSensor(coordinator, crm, mp))
 
-                # ── Senzori per utilitate (o singură dată per tip) ──
-                entities.append(NovaArhivaFacturiSensor(coordinator, crm, ut_short, ut_label))
-                entities.append(NovaDateContractSensor(coordinator, crm, mp))
-                entities.append(NovaConventionCurrentMonthSensor(coordinator, crm, mp))
-                entities.append(NovaFacturaRestantaSensor(coordinator, crm, mp))
+            # Revizie tehnică gaz — doar pentru MP-uri gaz
+            if utility == "gas":
+                entities.append(NovaGasRevisionSensor(coordinator, crm, mp))
 
-                # Revizie tehnică gaz
-                if utility == "gas":
-                    entities.append(NovaGasRevisionSensor(coordinator, crm, mp))
-
-            # ── Senzori per contor (meters array) ──
+            # ── Senzori per contor (meters array din MP) ──
             meters = mp.get("meters", [])
             for meter in meters:
                 entities.append(NovaMeterIndexSensor(coordinator, crm, mp, meter))
 
     _LOGGER.debug(
-        "[VreauLaNova] Se creează %d senzori pentru %d conturi",
+        "[VreauLaNova] Se creează %d senzori pentru %d conturi, %d locuri de consum",
         len(entities), len(accounts_data),
+        sum(len(a.get("metering_points", [])) for a in accounts_data.values()),
     )
     async_add_entities(entities)
 
 
 # ═══════════════════════════════════════════════
-# SENZORI CONT (PER UTILITATE)
+# SENZORI CONT-LEVEL (1x PER CRM)
 # ═══════════════════════════════════════════════
 
 class NovaBalanceSensor(NovaBaseSensor):
-    """Sold total (Lei) — per utilitate.
+    """Sold total (Lei) — GLOBAL: apare sub fiecare device LC.
 
-    Entity ID: sensor.{DOMAIN}_{crm}_{ut_short}_sold_total
+    Entity ID: sensor.{DOMAIN}_{crm}_{mp_slug}_sold_total
+    Toate instanțele afișează aceeași valoare (balance e per cont, nu per MP).
     """
 
     _attr_device_class = SensorDeviceClass.MONETARY
@@ -375,11 +384,11 @@ class NovaBalanceSensor(NovaBaseSensor):
     _attr_state_class = SensorStateClass.TOTAL
     _attr_icon = "mdi:cash"
 
-    def __init__(self, coordinator, crm, ut_short, ut_label):
-        super().__init__(coordinator, crm, ut_short, ut_label)
-        self._attr_unique_id = f"{DOMAIN}_{crm}_{ut_short}_balance"
+    def __init__(self, coordinator, crm, mp):
+        super().__init__(coordinator, crm, mp)
+        self._attr_unique_id = f"{DOMAIN}_{crm}_{self._mp_slug}_balance"
         self._attr_name = "Sold total"
-        self._custom_entity_id = f"sensor.{DOMAIN}_{crm}_{ut_short}_sold_total"
+        self._custom_entity_id = f"sensor.{DOMAIN}_{crm}_{self._mp_slug}_sold_total"
 
     @property
     def native_value(self) -> Any:
@@ -391,20 +400,20 @@ class NovaBalanceSensor(NovaBaseSensor):
 
 
 class NovaBalanceProsumerSensor(NovaBaseSensor):
-    """Sold prosumator (Lei) — per utilitate.
+    """Sold prosumator (Lei) — per cont.
 
-    Entity ID: sensor.{DOMAIN}_{crm}_{ut_short}_sold_prosumator
+    Entity ID: sensor.{DOMAIN}_{crm}_{mp_slug}_sold_prosumator
     """
 
     _attr_device_class = SensorDeviceClass.MONETARY
     _attr_native_unit_of_measurement = "RON"
     _attr_icon = "mdi:solar-power"
 
-    def __init__(self, coordinator, crm, ut_short, ut_label):
-        super().__init__(coordinator, crm, ut_short, ut_label)
-        self._attr_unique_id = f"{DOMAIN}_{crm}_{ut_short}_balance_prosumer"
+    def __init__(self, coordinator, crm, mp):
+        super().__init__(coordinator, crm, mp)
+        self._attr_unique_id = f"{DOMAIN}_{crm}_{self._mp_slug}_balance_prosumer"
         self._attr_name = "Sold prosumator"
-        self._custom_entity_id = f"sensor.{DOMAIN}_{crm}_{ut_short}_sold_prosumator"
+        self._custom_entity_id = f"sensor.{DOMAIN}_{crm}_{self._mp_slug}_sold_prosumator"
 
     @property
     def native_value(self) -> Any:
@@ -416,18 +425,18 @@ class NovaBalanceProsumerSensor(NovaBaseSensor):
 
 
 class NovaCitirePermisaSensor(NovaBaseSensor):
-    """Citire permisă — Da/Nu pe baza selfReadingsEnabled — per utilitate.
+    """Citire permisă — Da/Nu pe baza selfReadingsEnabled — per cont.
 
-    Entity ID: sensor.{DOMAIN}_{crm}_{ut_short}_citire_permisa
+    Entity ID: sensor.{DOMAIN}_{crm}_{mp_slug}_citire_permisa
     """
 
     _attr_icon = "mdi:pencil-box-outline"
 
-    def __init__(self, coordinator, crm, ut_short, ut_label):
-        super().__init__(coordinator, crm, ut_short, ut_label)
-        self._attr_unique_id = f"{DOMAIN}_{crm}_{ut_short}_citire_permisa"
+    def __init__(self, coordinator, crm, mp):
+        super().__init__(coordinator, crm, mp)
+        self._attr_unique_id = f"{DOMAIN}_{crm}_{self._mp_slug}_citire_permisa"
         self._attr_name = "Citire permisă"
-        self._custom_entity_id = f"sensor.{DOMAIN}_{crm}_{ut_short}_citire_permisa"
+        self._custom_entity_id = f"sensor.{DOMAIN}_{crm}_{self._mp_slug}_citire_permisa"
 
     @property
     def native_value(self) -> Any:
@@ -439,26 +448,82 @@ class NovaCitirePermisaSensor(NovaBaseSensor):
         return "Da" if enabled else "Nu"
 
 
+class NovaArhivaPlatiSensor(NovaBaseSensor):
+    """Arhivă plăți — nr plăți pe anul curent — per cont.
+
+    Entity ID: sensor.{DOMAIN}_{crm}_{mp_slug}_arhiva_plati
+    Notă: Plățile NU au utilityType → se afișează toate plățile contului.
+    """
+
+    _attr_icon = "mdi:cash-check"
+    _attr_state_class = SensorStateClass.MEASUREMENT
+
+    def __init__(self, coordinator, crm, mp):
+        super().__init__(coordinator, crm, mp)
+        self._attr_unique_id = f"{DOMAIN}_{crm}_{self._mp_slug}_arhiva_plati"
+        self._attr_name = "Arhivă plăți"
+        self._custom_entity_id = f"sensor.{DOMAIN}_{crm}_{self._mp_slug}_arhiva_plati"
+
+    def _payments_current_year(self) -> list[dict]:
+        """Filtrează plățile pe anul curent."""
+        acct = self._account_data()
+        payments = acct.get("payments", [])
+        current_year = str(datetime.now().year)
+        result = []
+        for pay in payments:
+            pay_date = pay.get("date", "")
+            if pay_date and current_year in pay_date:
+                result.append(pay)
+        return result
+
+    @property
+    def native_value(self) -> Any:
+        if not self._license_valid:
+            return "Licență necesară"
+        return len(self._payments_current_year())
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any] | None:
+        if not self._license_valid:
+            return None
+        payments = self._payments_current_year()
+        attrs: dict[str, Any] = {}
+
+        total = 0.0
+        for pay in payments:
+            date_ro = _format_date_ro(pay.get("date", ""))
+            try:
+                amount = float(pay.get("totalAmount", 0))
+            except (ValueError, TypeError):
+                amount = 0.0
+            total += amount
+            attrs[f"Plătită pe {date_ro}"] = _format_amount(amount)
+
+        attrs["Total plăți"] = str(len(payments))
+        attrs["Total plătit"] = _format_amount(total)
+        return attrs
+
+
 # ═══════════════════════════════════════════════
-# ARHIVE (ANUL CURENT) — PER UTILITATE
+# SENZORI PER LOC DE CONSUM (PER MP)
 # ═══════════════════════════════════════════════
 
 class NovaArhivaFacturiSensor(NovaBaseSensor):
-    """Arhivă facturi — nr facturi pe anul curent PER UTILITATE.
+    """Arhivă facturi — nr facturi pe anul curent PER LOC DE CONSUM.
 
-    Entity ID: sensor.{DOMAIN}_{crm}_{ut_short}_arhiva_facturi
-    Filtrează facturile pe utilityType.
+    Entity ID: sensor.{DOMAIN}_{crm}_{mp_slug}_arhiva_facturi
+    Filtrează facturile pe utilityType al MP-ului.
     """
 
     _attr_icon = "mdi:file-document-multiple-outline"
     _attr_state_class = SensorStateClass.MEASUREMENT
 
-    def __init__(self, coordinator, crm, ut_short, ut_label):
-        super().__init__(coordinator, crm, ut_short, ut_label)
-        self._utility_api = _utility_api_type(ut_short)
-        self._attr_unique_id = f"{DOMAIN}_{crm}_{ut_short}_arhiva_facturi"
+    def __init__(self, coordinator, crm, mp):
+        super().__init__(coordinator, crm, mp)
+        self._utility_api = _utility_api_type(self._ut_short)
+        self._attr_unique_id = f"{DOMAIN}_{crm}_{self._mp_slug}_arhiva_facturi"
         self._attr_name = "Arhivă facturi"
-        self._custom_entity_id = f"sensor.{DOMAIN}_{crm}_{ut_short}_arhiva_facturi"
+        self._custom_entity_id = f"sensor.{DOMAIN}_{crm}_{self._mp_slug}_arhiva_facturi"
 
     def _invoices_current_year(self) -> list[dict]:
         """Filtrează facturile pe anul curent și utilitatea senzorului."""
@@ -505,127 +570,88 @@ class NovaArhivaFacturiSensor(NovaBaseSensor):
         return attrs
 
 
-class NovaArhivaPlatiSensor(NovaBaseSensor):
-    """Arhivă plăți — nr plăți pe anul curent — per utilitate.
+class NovaDateContractSensor(NovaBaseSensor):
+    """Date contract per loc de consum — status + detalii.
 
-    Entity ID: sensor.{DOMAIN}_{crm}_{ut_short}_arhiva_plati
-    Notă: Plățile NU au utilityType → se afișează toate plățile.
+    Entity ID: sensor.{DOMAIN}_{crm}_{mp_slug}_date_contract
+    Matching: contractId de pe MP ↔ contractId din lista de contracte.
+    Fallback: match pe utilityType dacă contractId nu corespunde.
     """
 
-    _attr_icon = "mdi:cash-check"
-    _attr_state_class = SensorStateClass.MEASUREMENT
+    _attr_icon = "mdi:file-sign"
 
-    def __init__(self, coordinator, crm, ut_short, ut_label):
-        super().__init__(coordinator, crm, ut_short, ut_label)
-        self._attr_unique_id = f"{DOMAIN}_{crm}_{ut_short}_arhiva_plati"
-        self._attr_name = "Arhivă plăți"
-        self._custom_entity_id = f"sensor.{DOMAIN}_{crm}_{ut_short}_arhiva_plati"
-
-    def _payments_current_year(self) -> list[dict]:
-        """Filtrează plățile pe anul curent."""
-        acct = self._account_data()
-        payments = acct.get("payments", [])
-        current_year = str(datetime.now().year)
-        result = []
-        for pay in payments:
-            pay_date = pay.get("date", "")
-            if pay_date and current_year in pay_date:
-                result.append(pay)
-        return result
-
-    @property
-    def native_value(self) -> Any:
-        if not self._license_valid:
-            return "Licență necesară"
-        return len(self._payments_current_year())
-
-    @property
-    def extra_state_attributes(self) -> dict[str, Any] | None:
-        if not self._license_valid:
-            return None
-        payments = self._payments_current_year()
-        attrs: dict[str, Any] = {}
-
-        total = 0.0
-        for pay in payments:
-            date_ro = _format_date_ro(pay.get("date", ""))
-            try:
-                amount = float(pay.get("totalAmount", 0))
-            except (ValueError, TypeError):
-                amount = 0.0
-            total += amount
-            attrs[f"Plătită pe {date_ro}"] = _format_amount(amount)
-
-        attrs["Total plăți"] = str(len(payments))
-        attrs["Total plătit"] = _format_amount(total)
-        return attrs
-
-
-# ═══════════════════════════════════════════════
-# SENZORI PER CONTOR
-# ═══════════════════════════════════════════════
-
-class NovaMeterIndexSensor(NovaMPBaseSensor):
-    """Index curent contor + date ultima autocitire ca atribute.
-
-    Entity ID: sensor.{DOMAIN}_{crm}_{ut_short}_index_contor_{series}
-    """
-
-    _attr_state_class = SensorStateClass.TOTAL
-    _attr_icon = "mdi:counter"
-
-    def __init__(self, coordinator, crm, mp, meter):
+    def __init__(self, coordinator, crm, mp):
         super().__init__(coordinator, crm, mp)
-        self._meter = meter
-        self._series = meter.get("series", "")
-        self._attr_unique_id = f"{DOMAIN}_{crm}_{self._ut_short}_index_contor_{self._series}"
-        self._attr_name = "Index contor"
-        self._custom_entity_id = f"sensor.{DOMAIN}_{crm}_{self._ut_short}_index_contor_{self._series}"
-        self._attr_native_unit_of_measurement = _unit_for_utility(mp, meter)
+        self._mp_contract_id = mp.get("contractId", "")
+        self._attr_unique_id = f"{DOMAIN}_{crm}_{self._mp_slug}_date_contract"
+        self._attr_name = "Date contract"
+        self._custom_entity_id = f"sensor.{DOMAIN}_{crm}_{self._mp_slug}_date_contract"
 
-    @property
-    def native_value(self) -> Any:
-        if not self._license_valid:
-            return "Licență necesară"
+    def _find_contract(self) -> dict | None:
+        """Găsește contractul potrivit pentru acest loc de consum.
+
+        Strategia de matching:
+          1. contractId exact (MP.contractId == contract.contractId)
+          2. contractId partial (ultimele 32 chars) — Nova uneori diferă primele bytes
+          3. Fallback: utilityType match (dacă un singur contract pe acea utilitate)
+        """
         acct = self._account_data()
-        for mp in acct.get("metering_points", []):
-            if mp.get("meteringPointId") == self._mp_id:
-                for m in mp.get("meters", []):
-                    if m.get("series") == self._series:
-                        return m.get("currentIndex")
+        contracts = acct.get("contracts", [])
+        utility = self._mp.get("utilityType", "")
+
+        # 1. Match exact pe contractId
+        if self._mp_contract_id:
+            for c in contracts:
+                if c.get("contractId") == self._mp_contract_id:
+                    return c
+
+        # 2. Match partial (ultimele 32 chars — Nova poate diferi în primele bytes)
+        if self._mp_contract_id and len(self._mp_contract_id) > 8:
+            mp_suffix = self._mp_contract_id[4:]
+            for c in contracts:
+                cid = c.get("contractId", "")
+                if len(cid) > 8 and cid[4:] == mp_suffix:
+                    return c
+
+        # 3. Fallback: utilityType (dacă un singur contract pe acea utilitate)
+        utility_contracts = [c for c in contracts if c.get("utilityType") == utility]
+        if len(utility_contracts) == 1:
+            return utility_contracts[0]
+
         return None
 
     @property
+    def native_value(self) -> Any:
+        if not self._license_valid:
+            return "Licență necesară"
+        contract = self._find_contract()
+        if contract:
+            return contract.get("status", "N/A")
+        return "N/A"
+
+    @property
     def extra_state_attributes(self) -> dict[str, Any] | None:
         if not self._license_valid:
             return None
-        acct = self._account_data()
-        attrs: dict[str, Any] = {}
+        contract = self._find_contract()
+        if not contract:
+            return None
 
-        readings = acct.get("readings_by_meter", {}).get(self._series, [])
-        if readings:
-            latest = readings[0]
-            attrs["Ultima citire"] = latest.get("consumptionNewIndex")
-            attrs["Consum"] = latest.get("consumption")
-            attrs["Data ultima citire"] = latest.get("lastSelfReadingDate")
-            attrs["Index vechi"] = latest.get("consumptionOldIndex")
-        else:
-            attrs["Ultima citire"] = None
-            attrs["Consum"] = None
-            attrs["Data ultima citire"] = None
-            attrs["Index vechi"] = None
-
-        return attrs
+        return {
+            "Contract": contract.get("number", "N/A"),
+            "Tip client": contract.get("type", "N/A"),
+            "Semnat la": contract.get("signedAt", "N/A"),
+            "Intrat în vigoare": contract.get("inForceAt", "N/A"),
+            "Tip": contract.get("invoiceDeliveryType", "N/A"),
+            "Loc de consum": self._mp_number,
+            "CLC/POD": self._clc_pod,
+        }
 
 
-# ═══════════════════════════════════════════════
-# SENZORI PER UTILITATE — CONVENȚIE CONSUM
-# ═══════════════════════════════════════════════
-
-class NovaConventionCurrentMonthSensor(NovaMPBaseSensor):
+class NovaConventionCurrentMonthSensor(NovaBaseSensor):
     """Convenție consum — nr luni cu convenție + detalii per lună.
 
-    Entity ID: sensor.{DOMAIN}_{crm}_{ut_short}_conventie_consum
+    Entity ID: sensor.{DOMAIN}_{crm}_{mp_slug}_conventie_consum
     """
 
     _attr_state_class = SensorStateClass.MEASUREMENT
@@ -638,9 +664,9 @@ class NovaConventionCurrentMonthSensor(NovaMPBaseSensor):
 
     def __init__(self, coordinator, crm, mp):
         super().__init__(coordinator, crm, mp)
-        self._attr_unique_id = f"{DOMAIN}_{crm}_{self._ut_short}_conventie_consum"
+        self._attr_unique_id = f"{DOMAIN}_{crm}_{self._mp_slug}_conventie_consum"
         self._attr_name = "Convenție consum"
-        self._custom_entity_id = f"sensor.{DOMAIN}_{crm}_{self._ut_short}_conventie_consum"
+        self._custom_entity_id = f"sensor.{DOMAIN}_{crm}_{self._mp_slug}_conventie_consum"
 
     @property
     def native_value(self) -> Any:
@@ -680,26 +706,22 @@ class NovaConventionCurrentMonthSensor(NovaMPBaseSensor):
         return None
 
 
-# ═══════════════════════════════════════════════
-# SENZORI PER UTILITATE — FACTURI
-# ═══════════════════════════════════════════════
+class NovaFacturaRestantaSensor(NovaBaseSensor):
+    """Factură restantă — Da/Nu dacă există facturi neachitate per loc de consum.
 
-class NovaFacturaRestantaSensor(NovaMPBaseSensor):
-    """Factură restantă — Da/Nu dacă există facturi neachitate per MP.
-
-    Entity ID: sensor.{DOMAIN}_{crm}_{ut_short}_factura_restanta
+    Entity ID: sensor.{DOMAIN}_{crm}_{mp_slug}_factura_restanta
     """
 
     _attr_icon = "mdi:file-document-alert"
 
     def __init__(self, coordinator, crm, mp):
         super().__init__(coordinator, crm, mp)
-        self._attr_unique_id = f"{DOMAIN}_{crm}_{self._ut_short}_factura_restanta"
+        self._attr_unique_id = f"{DOMAIN}_{crm}_{self._mp_slug}_factura_restanta"
         self._attr_name = "Factură restantă"
-        self._custom_entity_id = f"sensor.{DOMAIN}_{crm}_{self._ut_short}_factura_restanta"
+        self._custom_entity_id = f"sensor.{DOMAIN}_{crm}_{self._mp_slug}_factura_restanta"
 
     def _get_unpaid(self) -> list[dict]:
-        """Returnează lista facturilor neachitate pentru acest MP."""
+        """Returnează lista facturilor neachitate pentru acest loc de consum."""
         acct = self._account_data()
         inv_list = acct.get("invoices_by_mp", {}).get(self._clc_pod, [])
         return [
@@ -740,83 +762,79 @@ class NovaFacturaRestantaSensor(NovaMPBaseSensor):
 
 
 # ═══════════════════════════════════════════════
-# SENZORI PER UTILITATE — DATE CONTRACT
+# SENZORI PER CONTOR (PER METER DIN MP)
 # ═══════════════════════════════════════════════
 
-class NovaDateContractSensor(NovaMPBaseSensor):
-    """Date contract per utilitate — status + detalii.
+class NovaMeterIndexSensor(NovaBaseSensor):
+    """Index curent contor + date ultima autocitire ca atribute.
 
-    Entity ID: sensor.{DOMAIN}_{crm}_{ut_short}_date_contract
-    Atribut principal: status contract (vine direct din API: Activ, Inactiv, etc.).
-    Atribute secundare: Contract (nr), Tip client, Semnat la, Intrat în vigoare, Tip.
-
-    Notă: API-ul Nova returnează valorile DEJA în română:
-      - status: "Activ" / "Inactiv"
-      - type: "Casnic" / "Non-casnic"
-      - invoiceDeliveryType: "Doar electronic" / etc.
+    Entity ID: sensor.{DOMAIN}_{crm}_{mp_slug}_index_contor_{series}
     """
 
-    _attr_icon = "mdi:file-sign"
+    _attr_state_class = SensorStateClass.TOTAL
+    _attr_icon = "mdi:counter"
 
-    def __init__(self, coordinator, crm, mp):
+    def __init__(self, coordinator, crm, mp, meter):
         super().__init__(coordinator, crm, mp)
-        self._attr_unique_id = f"{DOMAIN}_{crm}_{self._ut_short}_date_contract"
-        self._attr_name = "Date contract"
-        self._custom_entity_id = f"sensor.{DOMAIN}_{crm}_{self._ut_short}_date_contract"
-
-    def _find_contract(self) -> dict | None:
-        """Găsește contractul potrivit pentru utilitatea senzorului."""
-        acct = self._account_data()
-        contracts = acct.get("contracts", [])
-        utility = self._mp.get("utilityType", "")
-        for c in contracts:
-            if c.get("utilityType") == utility:
-                return c
-        return None
+        self._meter = meter
+        self._series = meter.get("series", "")
+        self._attr_unique_id = f"{DOMAIN}_{crm}_{self._mp_slug}_index_contor_{self._series}"
+        self._attr_name = "Index contor"
+        self._custom_entity_id = f"sensor.{DOMAIN}_{crm}_{self._mp_slug}_index_contor_{self._series}"
+        self._attr_native_unit_of_measurement = _unit_for_utility(mp, meter)
 
     @property
     def native_value(self) -> Any:
         if not self._license_valid:
             return "Licență necesară"
-        contract = self._find_contract()
-        if contract:
-            return contract.get("status", "N/A")
-        return "N/A"
+        acct = self._account_data()
+        for mp in acct.get("metering_points", []):
+            if mp.get("meteringPointId") == self._mp_id:
+                for m in mp.get("meters", []):
+                    if m.get("series") == self._series:
+                        return m.get("currentIndex")
+        return None
 
     @property
     def extra_state_attributes(self) -> dict[str, Any] | None:
         if not self._license_valid:
             return None
-        contract = self._find_contract()
-        if not contract:
-            return None
+        acct = self._account_data()
+        attrs: dict[str, Any] = {}
 
-        return {
-            "Contract": contract.get("number", "N/A"),
-            "Tip client": contract.get("type", "N/A"),
-            "Semnat la": contract.get("signedAt", "N/A"),
-            "Intrat în vigoare": contract.get("inForceAt", "N/A"),
-            "Tip": contract.get("invoiceDeliveryType", "N/A"),
-        }
+        readings = acct.get("readings_by_meter", {}).get(self._series, [])
+        if readings:
+            latest = readings[0]
+            attrs["Ultima citire"] = latest.get("consumptionNewIndex")
+            attrs["Consum"] = latest.get("consumption")
+            attrs["Data ultima citire"] = latest.get("lastSelfReadingDate")
+            attrs["Index vechi"] = latest.get("consumptionOldIndex")
+        else:
+            attrs["Ultima citire"] = None
+            attrs["Consum"] = None
+            attrs["Data ultima citire"] = None
+            attrs["Index vechi"] = None
+
+        return attrs
 
 
 # ═══════════════════════════════════════════════
-# SENZORI PER UTILITATE — REVIZII GAZ
+# SENZORI PER LOC DE CONSUM — REVIZII GAZ
 # ═══════════════════════════════════════════════
 
-class NovaGasRevisionSensor(NovaMPBaseSensor):
-    """Revizie tehnică gaz — un singur senzor consolidat per utilitate gaz.
+class NovaGasRevisionSensor(NovaBaseSensor):
+    """Revizie tehnică gaz — un senzor per loc de consum gaz.
 
-    Entity ID: sensor.{DOMAIN}_{crm}_gaz_revizie_tehnica
+    Entity ID: sensor.{DOMAIN}_{crm}_{mp_slug}_revizie_tehnica
     """
 
     _attr_icon = "mdi:wrench-clock"
 
     def __init__(self, coordinator, crm, mp):
         super().__init__(coordinator, crm, mp)
-        self._attr_unique_id = f"{DOMAIN}_{crm}_gaz_revizie_tehnica"
+        self._attr_unique_id = f"{DOMAIN}_{crm}_{self._mp_slug}_revizie_tehnica"
         self._attr_name = "Revizie tehnică"
-        self._custom_entity_id = f"sensor.{DOMAIN}_{crm}_gaz_revizie_tehnica"
+        self._custom_entity_id = f"sensor.{DOMAIN}_{crm}_{self._mp_slug}_revizie_tehnica"
 
     def _get_revisions(self) -> list[dict]:
         """Extrage gasRevisions din datele coordinator-ului."""
