@@ -76,6 +76,7 @@ class NovaCoordinator(DataUpdateCoordinator):
         # ── Fetch paralel: date esențiale ──
         essential = await asyncio.gather(
             self.api.async_get_metering_points(),
+            self.api.async_get_metering_points_self_readings(),
             self.api.async_get_invoices(),
             self.api.async_get_balances(),
             self.api.async_get_self_readings(),
@@ -83,16 +84,62 @@ class NovaCoordinator(DataUpdateCoordinator):
             return_exceptions=True,
         )
 
-        labels = ["metering_points", "invoices", "balances", "self_readings", "contracts"]
-        metering_points = essential[0] if not isinstance(essential[0], Exception) else []
-        invoices_raw = essential[1] if not isinstance(essential[1], Exception) else None
-        balances_raw = essential[2] if not isinstance(essential[2], Exception) else None
-        self_readings = essential[3] if not isinstance(essential[3], Exception) else []
-        contracts = essential[4] if not isinstance(essential[4], Exception) else []
+        labels = [
+            "metering_points", "metering_points_sr",
+            "invoices", "balances", "self_readings", "contracts",
+        ]
+        mp_primary = essential[0] if not isinstance(essential[0], Exception) else []
+        mp_self_readings = essential[1] if not isinstance(essential[1], Exception) else []
+        invoices_raw = essential[2] if not isinstance(essential[2], Exception) else None
+        balances_raw = essential[3] if not isinstance(essential[3], Exception) else None
+        self_readings = essential[4] if not isinstance(essential[4], Exception) else []
+        contracts = essential[5] if not isinstance(essential[5], Exception) else []
 
         for i, label in enumerate(labels):
             if isinstance(essential[i], Exception):
                 _LOGGER.warning("Eroare la %s (cont %s): %s", label, crm, essential[i])
+
+        # ── Merge metering points: /metering-points + /metering-points/self-readings ──
+        # /self-readings poate conține MP-uri extra (ex: LC vechi) sau meters populate
+        # când /metering-points le returnează goale.
+        metering_points = list(mp_primary)  # copie — nu mutăm originalul
+        seen_mp_ids = {
+            mp.get("meteringPointId") for mp in metering_points if mp.get("meteringPointId")
+        }
+
+        for sr_mp in mp_self_readings:
+            sr_id = sr_mp.get("meteringPointId", "")
+
+            if sr_id in seen_mp_ids:
+                # MP există deja — merge meters dacă primary are meters gol
+                for existing_mp in metering_points:
+                    if existing_mp.get("meteringPointId") == sr_id:
+                        if not existing_mp.get("meters") and sr_mp.get("meters"):
+                            existing_mp["meters"] = sr_mp["meters"]
+                            _LOGGER.debug(
+                                "Merge meters din /self-readings pentru MP %s",
+                                existing_mp.get("number", sr_id),
+                            )
+                        break
+            else:
+                # MP NOU — apare doar în /self-readings.
+                # Adăugăm DOAR dacă are specificIdForUtilityType valid (CLC/POD).
+                # MP-uri fără CLC/POD sunt vechi/inactive (ex: LC-00199881).
+                spec = sr_mp.get("specificIdForUtilityType", "")
+                if spec:
+                    metering_points.append(sr_mp)
+                    seen_mp_ids.add(sr_id)
+                    _LOGGER.debug(
+                        "MP extra din /self-readings: %s (%s) spec=%s",
+                        sr_mp.get("number", sr_id),
+                        sr_mp.get("utilityType", "?"),
+                        spec,
+                    )
+                else:
+                    _LOGGER.debug(
+                        "MP ignorat din /self-readings (fără CLC/POD): %s",
+                        sr_mp.get("number", sr_id),
+                    )
 
         # ── Consumption agreements per metering point ──
         agreements = {}
