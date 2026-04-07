@@ -1,11 +1,15 @@
 """Platforma Button pentru Nova Power & Gas (Vreau la Nova).
 
-Buton per punct de măsurare pentru trimiterea autocitirilor.
-Nova API: POST /self-readings/add cu payload specific per contor.
+Arhitectura v1.1 — PER LOC DE CONSUM (metering point):
 
-Pattern entity_id: button.{DOMAIN}_{crm}_{ut_short}_{suffix}
-Pattern 1:1 cu eonromania: _attr_has_entity_name = False, custom entity_id property.
-Device: un serviciu per CRM per utilitate.
+  Buton per contor (meter) per loc de consum pentru trimiterea autocitirilor.
+  Nova API: POST /self-readings/add cu payload specific per contor.
+
+Pattern entity_id: button.{DOMAIN}_{crm}_{mp_slug}_trimite_index
+  mp_slug = numărul locului de consum (LC-00202600 → lc00202600)
+
+Device: un device per CRM per metering point (identic cu sensor.py).
+  identifier: (DOMAIN, f"mp_{crm}_{mp_slug}")
 """
 
 import logging
@@ -47,11 +51,26 @@ def _utility_label(mp: dict) -> str:
     return ut
 
 
-def _utility_device(crm: str, ut_short: str, ut_label: str) -> DeviceInfo:
-    """Device info per CRM per utilitate — un serviciu per utilitate."""
+def _mp_slug(mp: dict) -> str:
+    """Generează un slug unic din numărul locului de consum.
+
+    LC-00202600 → lc00202600  (folosit în entity_id și device identifier)
+    """
+    number = mp.get("number", "") or mp.get("meteringPointId", "")[:12]
+    return number.lower().replace("-", "").replace(" ", "")
+
+
+def _mp_device(crm: str, mp: dict) -> DeviceInfo:
+    """Device info per CRM per loc de consum (metering point).
+
+    Identic cu sensor.py — același identifier = aceeași intrare în device registry.
+    Exemplu: Nova Power & Gas (6085537) LC-00202600 Gaz
+    """
+    mp_number = mp.get("number", "?")
+    ut_label = _utility_label(mp)
     return DeviceInfo(
-        identifiers={(DOMAIN, f"account_{crm}_{ut_short}")},
-        name=f"Nova Power & Gas ({crm}) {ut_label}",
+        identifiers={(DOMAIN, f"mp_{crm}_{_mp_slug(mp)}")},
+        name=f"Nova Power & Gas ({crm}) {mp_number} {ut_label}",
         manufacturer="Ciprian Nicolae (cnecrea)",
         model="Nova Power & Gas",
         entry_type=DeviceEntryType.SERVICE,
@@ -70,6 +89,9 @@ async def async_setup_entry(
     """Configurează butoanele pentru trimiterea autocitirilor.
 
     Iterează prin TOATE conturile (principal + asociate) din accounts_data.
+    Creează un buton per loc de consum (metering point).
+    Dacă MP-ul are meters, butonul le folosește la submit.
+    Dacă NU are meters, butonul se creează oricum (sub device-ul LC).
     """
     coordinator: NovaCoordinator = config_entry.runtime_data.coordinator
 
@@ -88,15 +110,10 @@ async def async_setup_entry(
         metering_points = acct_data.get("metering_points", [])
 
         for mp in metering_points:
-            meters = mp.get("meters", [])
-
-            for meter in meters:
-                series = meter.get("series", "")
-                if not series:
-                    continue
-                buttons.append(
-                    TrimiteIndexButton(coordinator, crm, mp, meter)
-                )
+            # Un buton per MP — meter-ul e opțional (se ia primul dacă există)
+            buttons.append(
+                TrimiteIndexButton(coordinator, crm, mp)
+            )
 
     if buttons:
         _LOGGER.debug(
@@ -107,11 +124,11 @@ async def async_setup_entry(
 
 
 # ═══════════════════════════════════════════════
-# CLASĂ DE BAZĂ — PATTERN IDENTIC CU EONROMANIA
+# CLASĂ DE BAZĂ — PER LOC DE CONSUM
 # ═══════════════════════════════════════════════
 
 class NovaBaseButton(ButtonEntity):
-    """Bază pentru toate butoanele Nova — custom entity_id."""
+    """Bază pentru toate butoanele Nova — custom entity_id, device per MP."""
 
     _attr_has_entity_name = False
 
@@ -119,13 +136,14 @@ class NovaBaseButton(ButtonEntity):
         self,
         coordinator: NovaCoordinator,
         crm: str,
-        ut_short: str = "gaz",
-        ut_label: str = "Gaz",
+        mp: dict,
     ) -> None:
         self._coordinator = coordinator
         self._crm = crm
-        self._ut_short = ut_short
-        self._ut_label = ut_label
+        self._mp = mp
+        self._mp_slug = _mp_slug(mp)
+        self._ut_short = _utility_short(mp)
+        self._ut_label = _utility_label(mp)
         self._custom_entity_id: str | None = None
 
     @property
@@ -144,7 +162,7 @@ class NovaBaseButton(ButtonEntity):
 
     @property
     def device_info(self) -> DeviceInfo:
-        return _utility_device(self._crm, self._ut_short, self._ut_label)
+        return _mp_device(self._crm, self._mp)
 
 
 # ═══════════════════════════════════════════════
@@ -152,7 +170,12 @@ class NovaBaseButton(ButtonEntity):
 # ═══════════════════════════════════════════════
 
 class TrimiteIndexButton(NovaBaseButton):
-    """Buton pentru trimiterea autocitirilor la Nova API."""
+    """Buton pentru trimiterea autocitirilor la Nova API.
+
+    Se creează UN buton per loc de consum (metering point).
+    Meter-ul se ia din coordinator data la runtime (nu la init).
+    Dacă MP-ul nu are meters, butonul apare dar e unavailable.
+    """
 
     _attr_attribution = ATTRIBUTION
 
@@ -161,32 +184,44 @@ class TrimiteIndexButton(NovaBaseButton):
         coordinator: NovaCoordinator,
         crm: str,
         mp: dict,
-        meter: dict,
     ):
-        """Inițializare buton trimitere index."""
-        ut_short = _utility_short(mp)
-        ut_label = _utility_label(mp)
-        super().__init__(coordinator, crm, ut_short, ut_label)
-        self._mp = mp
-        self._meter = meter
+        """Inițializare buton trimitere index — per MP."""
+        super().__init__(coordinator, crm, mp)
 
         self._clc_pod = mp.get("specificIdForUtilityType", "")
-        self._series = meter.get("series", "")
         self._utility = mp.get("utilityType", "unknown")
 
         self._attr_name = "Trimite index"
-        self._attr_unique_id = f"{DOMAIN}_{crm}_{ut_short}_trimite_index_{self._series}"
+        self._attr_unique_id = f"{DOMAIN}_{crm}_{self._mp_slug}_trimite_index"
         self._attr_icon = "mdi:fire" if self._utility == "gas" else "mdi:flash"
 
-        # Custom entity_id: button.vreaulanova_{crm}_{ut_short}_trimite_index
+        # Custom entity_id: button.vreaulanova_{crm}_{mp_slug}_trimite_index
         self._custom_entity_id = (
-            f"button.{DOMAIN}_{crm}_{ut_short}_trimite_index"
+            f"button.{DOMAIN}_{crm}_{self._mp_slug}_trimite_index"
         )
+
+    def _get_current_meter(self) -> dict | None:
+        """Obține primul meter din MP la runtime (din coordinator data).
+
+        Meter-ul poate apărea mai târziu (heavy refresh, self-readings fetch).
+        """
+        data = self._coordinator.data or {}
+        acct = data.get("accounts_data", {}).get(self._crm, {})
+        for mp in acct.get("metering_points", []):
+            if mp.get("meteringPointId") == self._mp.get("meteringPointId"):
+                meters = mp.get("meters", [])
+                if meters:
+                    return meters[0]
+        # Fallback: meters din MP-ul stocat la init
+        meters = self._mp.get("meters", [])
+        return meters[0] if meters else None
 
     @property
     def available(self) -> bool:
-        """Butonul e disponibil doar dacă licența e validă și coordinator-ul e ok."""
-        return self._license_valid and self._coordinator.last_update_success
+        """Butonul e disponibil dacă: licență validă + coordinator ok + meter prezent."""
+        if not self._license_valid or not self._coordinator.last_update_success:
+            return False
+        return self._get_current_meter() is not None
 
     async def async_press(self) -> None:
         """Trimite autocitirea la Nova API.
@@ -203,8 +238,18 @@ class TrimiteIndexButton(NovaBaseButton):
             _LOGGER.warning("[Nova:Button] Licență invalidă — trimiterea indexului nu e posibilă.")
             return
 
+        meter = self._get_current_meter()
+        if not meter:
+            _LOGGER.error(
+                "[Nova:Button] Nu există contor (meter) pentru MP %s — nu se poate trimite index.",
+                self._mp.get("number", "?"),
+            )
+            return
+
+        series = meter.get("series", "")
+
         # Citește valoarea din input_number entity
-        input_entity_id = f"input_number.{DOMAIN}_{self._clc_pod}_{self._series}_index"
+        input_entity_id = f"input_number.{DOMAIN}_{self._clc_pod}_{series}_index"
         state = self._coordinator.hass.states.get(input_entity_id)
 
         if not state or state.state in ("unknown", "unavailable"):
@@ -233,7 +278,6 @@ class TrimiteIndexButton(NovaBaseButton):
         needs_switch = current_crm != self._crm
 
         if needs_switch:
-            # Găsim obiectul contului din associated_accounts
             associated = self._coordinator.api.associated_accounts or []
             target_account = None
             for aa in associated:
@@ -253,20 +297,20 @@ class TrimiteIndexButton(NovaBaseButton):
         payload = {
             "utilityType": self._utility,
             "meteringPointNumber": self._mp.get("number", ""),
-            "meterSeries": self._series,
-            "meterCode": self._meter.get("meterCode", ""),
+            "meterSeries": series,
+            "meterCode": meter.get("meterCode", ""),
             "newIndex": index_value,
             "specificIdForUtilityType": self._clc_pod,
-            "currentIndex": self._meter.get("currentIndex", 0),
-            "unit": self._meter.get("unit", ""),
-            "dialCode": self._meter.get("dialCode", ""),
+            "currentIndex": meter.get("currentIndex", 0),
+            "unit": meter.get("unit", ""),
+            "dialCode": meter.get("dialCode", ""),
             "accountName": account_name,
         }
 
         _LOGGER.info(
             "[Nova:Button] Trimitere autocitire: cont=%s, clc_pod=%s, series=%s, "
             "newIndex=%s, utility=%s",
-            self._crm, self._clc_pod, self._series, index_value, self._utility,
+            self._crm, self._clc_pod, series, index_value, self._utility,
         )
 
         result = await self._coordinator.api_client.async_submit_self_reading(payload)
@@ -283,7 +327,7 @@ class TrimiteIndexButton(NovaBaseButton):
                 })
 
         if result:
-            _LOGGER.info("[Nova:Button] Autocitire trimisă cu succes pentru %s.", self._series)
+            _LOGGER.info("[Nova:Button] Autocitire trimisă cu succes pentru %s.", series)
             await self._coordinator.async_request_refresh()
         else:
-            _LOGGER.error("[Nova:Button] Trimiterea autocitirilor a eșuat pentru %s.", self._series)
+            _LOGGER.error("[Nova:Button] Trimiterea autocitirilor a eșuat pentru %s.", series)
