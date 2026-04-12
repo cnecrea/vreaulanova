@@ -238,6 +238,16 @@ class TrimiteIndexButton(NovaBaseButton):
             _LOGGER.warning("[Nova:Button] Licență invalidă — trimiterea indexului nu e posibilă.")
             return
 
+        # Verifică dacă suntem în perioada de transmitere autocitiri
+        data = self._coordinator.data or {}
+        app_info = data.get("app_info") or {}
+        if not app_info.get("selfReadingsEnabled", False):
+            _LOGGER.warning(
+                "[Nova:Button] Autocitirile nu sunt permise în această perioadă. "
+                "Butonul este blocat până la deschiderea ferestrei de transmitere."
+            )
+            return
+
         meter = self._get_current_meter()
         if not meter:
             _LOGGER.error(
@@ -249,7 +259,9 @@ class TrimiteIndexButton(NovaBaseButton):
         series = meter.get("series", "")
 
         # Citește valoarea din input_number entity
-        input_entity_id = f"input_number.{DOMAIN}_{self._clc_pod}_{series}_index"
+        # Sanitizăm CLC/POD: HA normalizează entity ID-urile (lowercase, / → _)
+        safe_pod = self._clc_pod.lower().replace("/", "_").replace("-", "_").replace(" ", "_")
+        input_entity_id = f"input_number.{DOMAIN}_{safe_pod}_{series}_index"
         state = self._coordinator.hass.states.get(input_entity_id)
 
         if not state or state.state in ("unknown", "unavailable"):
