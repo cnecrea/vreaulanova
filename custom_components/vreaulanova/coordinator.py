@@ -30,7 +30,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 
 from .api import NovaApiClient
-from .const import DEFAULT_UPDATE_INTERVAL, HEAVY_UPDATE_MULTIPLIER, MONTHS_EN
+from .const import DEFAULT_UPDATE_INTERVAL, DOMAIN, HEAVY_UPDATE_MULTIPLIER, LICENSE_DATA_KEY, MONTHS_EN
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -222,6 +222,12 @@ class NovaCoordinator(DataUpdateCoordinator):
 
     async def _async_update_data(self) -> dict:
         """Extrage toate datele de la API-ul Nova pentru TOATE conturile."""
+        # Verificare licență — nu fetchuim date dacă licența/trial nu e validă
+        license_mgr = self.hass.data.get(DOMAIN, {}).get(LICENSE_DATA_KEY)
+        if license_mgr and not license_mgr.is_valid:
+            _LOGGER.debug("[VreauLaNova] Licență invalidă — se omit apelurile API")
+            return self.data or {}
+
         is_heavy = self._is_heavy
         _LOGGER.debug(
             "Actualizare Nova (refresh=#%s, tip=%s)",
@@ -267,37 +273,44 @@ class NovaCoordinator(DataUpdateCoordinator):
             associated = self.api.associated_accounts or []
             switched = False
 
-            for aa in associated:
-                aa_crm = str(aa.get("accountNumber", "")).strip()
-                if not aa_crm or aa_crm in accounts_data:
-                    continue  # Deja extras sau CRM invalid
+            try:
+                for aa in associated:
+                    aa_crm = str(aa.get("accountNumber", "")).strip()
+                    if not aa_crm or aa_crm in accounts_data:
+                        continue  # Deja extras sau CRM invalid
 
-                _LOGGER.debug(
-                    "Switch la contul asociat: %s (%s)",
-                    aa.get("accountName", "?"), aa_crm,
-                )
-
-                switch_result = await self.api.async_switch_account(aa)
-                if switch_result:
-                    switched = True
-                    aa_name = aa.get("accountName", "")
-                    aa_data = await self._fetch_account_data(aa_crm, aa_name, is_heavy)
-                    accounts_data[aa_crm] = aa_data
-                else:
-                    _LOGGER.warning(
-                        "Switch eșuat la contul asociat %s (%s)",
+                    _LOGGER.debug(
+                        "Switch la contul asociat: %s (%s)",
                         aa.get("accountName", "?"), aa_crm,
                     )
 
-            # ── Revenire la contul principal ──
-            if switched and logged_crm:
-                logged_in = self.api.logged_in_account or {}
-                _LOGGER.debug("Revenire la contul principal: %s", logged_crm)
-                await self.api.async_switch_account({
-                    "accountName": logged_in.get("accountName", ""),
-                    "accountNumber": logged_in.get("accountNumber", ""),
-                    "accountId": logged_in.get("accountId", ""),
-                })
+                    switch_result = await self.api.async_switch_account(aa)
+                    if switch_result:
+                        switched = True
+                        aa_name = aa.get("accountName", "")
+                        aa_data = await self._fetch_account_data(aa_crm, aa_name, is_heavy)
+                        accounts_data[aa_crm] = aa_data
+                    else:
+                        _LOGGER.warning(
+                            "Switch eșuat la contul asociat %s (%s)",
+                            aa.get("accountName", "?"), aa_crm,
+                        )
+            finally:
+                # ── Revenire la contul principal (ALWAYS — inclusiv pe excepție) ──
+                if switched and logged_crm:
+                    logged_in = self.api.logged_in_account or {}
+                    _LOGGER.debug("Revenire la contul principal: %s", logged_crm)
+                    try:
+                        await self.api.async_switch_account({
+                            "accountName": logged_in.get("accountName", ""),
+                            "accountNumber": logged_in.get("accountNumber", ""),
+                            "accountId": logged_in.get("accountId", ""),
+                        })
+                    except Exception as sw_err:
+                        _LOGGER.error(
+                            "Eroare la revenirea pe contul principal %s: %s",
+                            logged_crm, sw_err,
+                        )
 
             # Incrementăm counter
             self._refresh_count += 1
