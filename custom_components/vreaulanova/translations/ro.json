@@ -1,9 +1,7 @@
 {
   "title": "Nova Power & Gas",
-
   "config": {
     "flow_title": "Nova Power & Gas",
-
     "step": {
       "user": {
         "title": "Conectare la contul Nova Power & Gas",
@@ -15,20 +13,16 @@
         }
       }
     },
-
     "error": {
       "auth_failed": "Autentificare eșuată. Verificați adresa de email și parola.",
       "no_data": "Autentificare reușită, dar nu au fost găsite date asociate acestui cont."
     },
-
     "abort": {
       "already_configured": "Acest cont Nova Power & Gas este deja configurat."
     }
   },
-
   "options": {
     "flow_title": "Setări Nova Power & Gas",
-
     "step": {
       "init": {
         "title": "Setări Nova Power & Gas",
@@ -38,7 +32,6 @@
           "licenta": "Licență"
         }
       },
-
       "settings": {
         "title": "Setări cont",
         "description": "Actualizați credențialele și intervalul de actualizare.",
@@ -48,7 +41,6 @@
           "update_interval": "Interval de actualizare (secunde)"
         }
       },
-
       "licenta": {
         "title": "Licență Nova Power & Gas",
         "description": "{license_status}\n\nIntrodu cheia de licență pentru a activa sau reînnoi integrarea.",
@@ -57,7 +49,6 @@
         }
       }
     },
-
     "error": {
       "auth_failed": "Autentificare eșuată cu credențialele introduse.",
       "no_data": "Nu au fost găsite date asociate acestui cont.",
@@ -68,6 +59,16 @@
       "license_fingerprint_mismatch": "Această cheie de licență este asociată altei instalări.",
       "license_network_error": "Nu se poate conecta la serverul de licențe. Verifică conexiunea la internet.",
       "license_server_error": "Eroare server licențe. Încearcă din nou mai târziu."
+    }
+  },
+  "issues": {
+    "trial_expired": {
+      "title": "Licența de probă a expirat — Nova Power & Gas",
+      "description": "Perioada de evaluare gratuită s-a încheiat.\n\nSenzorii sunt dezactivați până la obținerea unei licențe.\n\n[Obține o licență acum]({learn_more_url})"
+    },
+    "license_expired": {
+      "title": "Licența a expirat — Nova Power & Gas",
+      "description": "Licența pentru această integrare a expirat.\n\nSenzorii sunt dezactivați până la reînnoirea licenței.\n\n[Reînnoiește licența]({learn_more_url})"
     }
   }
 }

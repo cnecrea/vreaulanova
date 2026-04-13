@@ -1,9 +1,7 @@
 {
   "title": "Nova Power & Gas",
-
   "config": {
     "flow_title": "Nova Power & Gas",
-
     "step": {
       "user": {
         "title": "Connect to Nova Power & Gas account",
@@ -15,20 +13,16 @@
         }
       }
     },
-
     "error": {
       "auth_failed": "Authentication failed. Please check your email and password.",
       "no_data": "Authentication was successful, but no data was found for this account."
     },
-
     "abort": {
       "already_configured": "This Nova Power & Gas account is already configured."
     }
   },
-
   "options": {
     "flow_title": "Nova Power & Gas settings",
-
     "step": {
       "init": {
         "title": "Nova Power & Gas Settings",
@@ -38,7 +32,6 @@
           "licenta": "License"
         }
       },
-
       "settings": {
         "title": "Account settings",
         "description": "Update your credentials and refresh interval.",
@@ -48,7 +41,6 @@
           "update_interval": "Update interval (seconds)"
         }
       },
-
       "licenta": {
         "title": "Nova Power & Gas License",
         "description": "{license_status}\n\nEnter your license key to activate or renew the integration.",
@@ -57,7 +49,6 @@
         }
       }
     },
-
     "error": {
       "auth_failed": "Authentication failed with the provided credentials.",
       "no_data": "No data was found for this account.",
@@ -68,6 +59,16 @@
       "license_fingerprint_mismatch": "This license key is bound to a different installation.",
       "license_network_error": "Cannot connect to the license server. Check your internet connection.",
       "license_server_error": "License server error. Please try again later."
+    }
+  },
+  "issues": {
+    "trial_expired": {
+      "title": "Trial expired — Nova Power & Gas",
+      "description": "The free trial period has ended.\n\nSensors are disabled until a license is obtained.\n\n[Get a license now]({learn_more_url})"
+    },
+    "license_expired": {
+      "title": "License expired — Nova Power & Gas",
+      "description": "The license for this integration has expired.\n\nSensors are disabled until the license is renewed.\n\n[Renew license]({learn_more_url})"
     }
   }
 }

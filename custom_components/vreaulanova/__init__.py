@@ -9,11 +9,13 @@ from dataclasses import dataclass, field
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
+from homeassistant.components import persistent_notification
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers import config_validation as cv
+from homeassistant.helpers import issue_registry as ir
 from homeassistant.helpers.update_coordinator import UpdateFailed
 
-from .const import DOMAIN, DEFAULT_UPDATE_INTERVAL, DOMAIN_TOKEN_STORE, LICENSE_DATA_KEY, PLATFORMS
+from .const import DOMAIN, DEFAULT_UPDATE_INTERVAL, DOMAIN_TOKEN_STORE, LICENSE_DATA_KEY, LICENSE_PURCHASE_URL, PLATFORMS
 from .api import NovaApiClient
 from .coordinator import NovaCoordinator
 from .license import LicenseManager
@@ -34,6 +36,59 @@ class NovaRuntimeData:
 async def async_setup(hass: HomeAssistant, config: dict):
     """Configurează integrarea globală Nova Power & Gas."""
     return True
+
+
+
+def _update_license_notifications(hass: HomeAssistant, mgr: LicenseManager) -> None:
+    """Creează sau șterge notificările de expirare licență/trial."""
+    if mgr.is_valid:
+        ir.async_delete_issue(hass, DOMAIN, "trial_expired")
+        ir.async_delete_issue(hass, DOMAIN, "license_expired")
+        persistent_notification.async_dismiss(hass, "vreaulanova_license_expired")
+        return
+
+    has_token = bool(mgr._data.get("activation_token"))
+
+    if has_token:
+        issue_id = "license_expired"
+        notif_title = "Nova Power & Gas — Licența a expirat"
+        notif_message = (
+            "Licența pentru integrarea **Nova Power & Gas** a expirat.\n\n"
+            "Senzorii sunt dezactivați până la reînnoirea licenței.\n\n"
+            f"[Reînnoiește licența]({LICENSE_PURCHASE_URL})"
+        )
+    else:
+        issue_id = "trial_expired"
+        notif_title = "Nova Power & Gas — Licența de probă a expirat"
+        notif_message = (
+            "Perioada de evaluare gratuită pentru integrarea **Nova Power & Gas** s-a încheiat.\n\n"
+            "Senzorii sunt dezactivați până la obținerea unei licențe.\n\n"
+            f"[Obține o licență acum]({LICENSE_PURCHASE_URL})"
+        )
+
+    other_id = "license_expired" if issue_id == "trial_expired" else "trial_expired"
+    ir.async_delete_issue(hass, DOMAIN, other_id)
+
+    ir.async_create_issue(
+        hass,
+        DOMAIN,
+        issue_id,
+        is_fixable=False,
+        is_persistent=True,
+        learn_more_url=LICENSE_PURCHASE_URL,
+        severity=ir.IssueSeverity.WARNING,
+        translation_key=issue_id,
+        translation_placeholders={"learn_more_url": LICENSE_PURCHASE_URL},
+    )
+
+    persistent_notification.async_create(
+        hass,
+        notif_message,
+        title=notif_title,
+        notification_id="vreaulanova_license_expired",
+    )
+
+    _LOGGER.debug("[Nova] Notificare expirare creată: %s", issue_id)
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry):
@@ -112,11 +167,13 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry):
                     _LOGGER.warning(
                         "[VreauLaNova] Licența a devenit invalidă — reîncarc senzorii"
                     )
+                    _update_license_notifications(hass, mgr)
                     await mgr._async_reload_entries()
                 elif not was_valid and now_valid:
                     _LOGGER.info(
                         "[VreauLaNova] Licența a redevenit validă — reîncarc senzorii"
                     )
+                    _update_license_notifications(hass, mgr)
                     await mgr._async_reload_entries()
 
                 # Reprogramează heartbeat-ul la intervalul actualizat de server
@@ -191,6 +248,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry):
                         _LOGGER.warning(
                             "[Nova] Licența a devenit invalidă — reîncarc"
                         )
+                    _update_license_notifications(hass, mgr_now)
                     await mgr_now._async_reload_entries()
 
                 # Programează următorul check (dacă serverul a dat valid_until nou)
@@ -228,6 +286,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry):
                 "[VreauLaNova] Licență activă — tip: %s",
                 license_mgr.license_type,
             )
+
+        # ── Verificare inițială notificări expirare licență/trial ──
+        _update_license_notifications(hass, license_mgr)
     else:
         _LOGGER.debug(
             "[VreauLaNova] LicenseManager există deja (entry suplimentară)"
