@@ -1906,7 +1906,11 @@
           "vizite": 1,
           "vizitatori_unici": 1
         }
-      ]
+      ],
+      "clones_total": 14,
+      "clones_unice": 6,
+      "views_total": 0,
+      "views_unice": 0
     },
     "2026-06-12": {
       "stars": 2,
@@ -1924,7 +1928,17 @@
           "vizite": 1,
           "vizitatori_unici": 1
         }
-      ]
+      ],
+      "clones_total": 16,
+      "clones_unice": 7,
+      "views_total": 0,
+      "views_unice": 0
+    },
+    "2026-06-13": {
+      "stars": 2,
+      "forks": 0,
+      "watchers": 0,
+      "open_issues": 0
     }
   },
   "releases": {
@@ -1939,5 +1953,5 @@
     "1.1.0": 3,
     "1.0.0": 0
   },
-  "ultima_actualizare": "2026-06-12T09:58:49Z"
+  "ultima_actualizare": "2026-06-13T08:48:33Z"
 }
