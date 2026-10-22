@@ -30,6 +30,7 @@ Conform STANDARD-LICENTA.md:
 """
 
 import logging
+import re
 from datetime import datetime
 from typing import Any
 
@@ -45,6 +46,7 @@ from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.device_registry import DeviceEntryType, DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
+from homeassistant.util import slugify
 
 from .const import ATTRIBUTION, DOMAIN, LICENSE_DATA_KEY, MONTHS_RO
 from .coordinator import NovaCoordinator
@@ -99,7 +101,16 @@ def _mp_slug(mp: dict) -> str:
     LC-00202600 → lc00202600  (folosit în entity_id și device identifier)
     """
     number = mp.get("number", "") or mp.get("meteringPointId", "")[:12]
-    return number.lower().replace("-", "").replace(" ", "")
+    slug = number.lower().replace("-", "").replace(" ", "")
+    return _id_part(slug)
+
+
+def _id_part(value: str) -> str:
+    """Fragment valid de entity_id: litere mici, cifre și „_".
+
+    Valorile deja valide rămân neschimbate (ID-urile existente nu se mută).
+    """
+    return re.sub(r"[^a-z0-9_]+", "_", str(value).lower()).strip("_")
 
 
 def _mp_device(crm: str, mp: dict) -> DeviceInfo:
@@ -393,7 +404,7 @@ class NovaBalanceSensor(NovaBaseSensor):
     @property
     def native_value(self) -> Any:
         if not self._license_valid:
-            return "Licență necesară"
+            return None  # senzor numeric: fără licență → necunoscut
         acct = self._account_data()
         balance = acct.get("balance", {})
         return balance.get("total", 0)
@@ -418,7 +429,7 @@ class NovaBalanceProsumerSensor(NovaBaseSensor):
     @property
     def native_value(self) -> Any:
         if not self._license_valid:
-            return "Licență necesară"
+            return None  # senzor numeric: fără licență → necunoscut
         acct = self._account_data()
         balance = acct.get("balance", {})
         return balance.get("prosumer", 0)
@@ -479,7 +490,7 @@ class NovaArhivaPlatiSensor(NovaBaseSensor):
     @property
     def native_value(self) -> Any:
         if not self._license_valid:
-            return "Licență necesară"
+            return None  # senzor numeric: fără licență → necunoscut
         return len(self._payments_current_year())
 
     @property
@@ -545,7 +556,7 @@ class NovaArhivaFacturiSensor(NovaBaseSensor):
     @property
     def native_value(self) -> Any:
         if not self._license_valid:
-            return "Licență necesară"
+            return None  # senzor numeric: fără licență → necunoscut
         return len(self._invoices_current_year())
 
     @property
@@ -671,7 +682,7 @@ class NovaConventionCurrentMonthSensor(NovaBaseSensor):
     @property
     def native_value(self) -> Any:
         if not self._license_valid:
-            return "Licență necesară"
+            return None  # senzor numeric: fără licență → necunoscut
         acct = self._account_data()
         agreement_data = acct.get("agreements", {}).get(self._mp_id)
         if agreement_data:
@@ -780,13 +791,19 @@ class NovaMeterIndexSensor(NovaBaseSensor):
         self._series = meter.get("series", "")
         self._attr_unique_id = f"{DOMAIN}_{crm}_{self._mp_slug}_index_contor_{self._series}"
         self._attr_name = "Index contor"
-        self._custom_entity_id = f"sensor.{DOMAIN}_{crm}_{self._mp_slug}_index_contor_{self._series}"
+        # Seria poate conține „/" sau majuscule (ex: „ABC/1234/2022"): HA acceptă
+        # azi un astfel de entity_id doar cu avertisment de depreciere și îl
+        # normalizează singur, iar din 2027.2 îl respinge. Îl normalizăm noi,
+        # identic cu HA (slugify) — ID-ul existent rămâne același.
+        self._custom_entity_id = (
+            f"sensor.{slugify(f'{DOMAIN}_{crm}_{self._mp_slug}_index_contor_{self._series}')}"
+        )
         self._attr_native_unit_of_measurement = _unit_for_utility(mp, meter)
 
     @property
     def native_value(self) -> Any:
         if not self._license_valid:
-            return "Licență necesară"
+            return None  # senzor numeric: fără licență → necunoscut
         acct = self._account_data()
         for mp in acct.get("metering_points", []):
             if mp.get("meteringPointId") == self._mp_id:

@@ -9,6 +9,7 @@ import logging
 import time
 from typing import Any
 
+import aiohttp
 from aiohttp import ClientSession, ClientTimeout
 
 from .const import (
@@ -35,6 +36,14 @@ from .const import (
 _LOGGER = logging.getLogger(__name__)
 
 
+class NovaApiError(Exception):
+    """Cerere Nova eșuată (rețea, timeout, răspuns HTTP neașteptat)."""
+
+
+class NovaAuthError(NovaApiError):
+    """Nova a respins email-ul / parola."""
+
+
 class NovaApiClient:
     """Client API pentru Nova Power & Gas (Payload CMS backend)."""
 
@@ -48,6 +57,15 @@ class NovaApiClient:
         self._token_obtained_at: float = 0.0
         self._token_expires_in: int = TOKEN_MAX_AGE
         self._auth_lock = asyncio.Lock()
+        self._token_generation: int = 0
+        # Token salvat fără momentul obținerii → re-login la prima cerere
+        self._force_login: bool = False
+        # Ultimul login a fost respins pentru credențiale (parolă schimbată)
+        self._auth_rejected: bool = False
+        # Contul vizualizat e o stare a SESIUNII de pe server: comutarea pe un cont
+        # asociat (actualizare date / trimitere index) se face doar sub acest lacăt,
+        # altfel un index putea fi trimis pe contul greșit.
+        self.account_lock = asyncio.Lock()
 
         # Date cont din login — endpoint-ul /accounts/login/client returnează:
         #   data.loggedInAccount  — contul principal (cu associatedAccounts[])
@@ -124,9 +142,14 @@ class NovaApiClient:
     def has_token(self) -> bool:
         return self._access_token is not None
 
+    @property
+    def auth_rejected(self) -> bool:
+        """True dacă Nova a respins credențialele la ultimul login."""
+        return self._auth_rejected
+
     def is_token_valid(self) -> bool:
         """Verifică dacă token-ul e valid (există și nu a expirat)."""
-        if not self._access_token:
+        if not self._access_token or self._force_login:
             return False
         age = time.monotonic() - self._token_obtained_at
         return age < (self._token_expires_in - TOKEN_REFRESH_THRESHOLD)
@@ -176,129 +199,159 @@ class NovaApiClient:
         Returnează True dacă autentificarea a reușit.
         """
         async with self._auth_lock:
-            try:
-                async with self._session.post(
-                    URL_LOGIN,
-                    json={"email": self._email, "password": self._password},
-                    headers=HEADERS_BASE,
-                    timeout=self._timeout,
-                ) as resp:
-                    if resp.status != 200:
-                        _LOGGER.error(
-                            "Login eșuat: status=%s, email=%s", resp.status, self._email
-                        )
-                        return False
+            return await self._async_login_unlocked()
 
-                    data = await resp.json()
-                    payload = data.get("data", {}) or {}
-
-                    logged_in = payload.get("loggedInAccount", {}) or {}
-                    viewed = payload.get("viewedAccount", {}) or {}
-                    session_data = payload.get("session", {}) or {}
-
-                    # Token — din data.session.token
-                    self._access_token = session_data.get("token")
-                    if not self._access_token:
-                        # Fallback: token la nivel root (compatibilitate)
-                        self._access_token = data.get("token")
-                    if not self._access_token:
-                        # Fallback: cookie payload-token
-                        cookie = self._session.cookie_jar.filter_cookies(URL_LOGIN)
-                        pt = cookie.get("payload-token")
-                        if pt:
-                            self._access_token = pt.value
-
-                    if not self._access_token:
-                        _LOGGER.error("Login reușit dar token absent din răspuns")
-                        return False
-
-                    self._token_obtained_at = time.monotonic()
-
-                    # Calculăm expires_in din expireAt (epoch)
-                    expire_at = session_data.get("expireAt")
-                    if expire_at and isinstance(expire_at, (int, float)):
-                        self._token_expires_in = int(expire_at - time.time())
-                    else:
-                        # Fallback: exp la nivel root (format APK)
-                        exp = data.get("exp")
-                        if exp and isinstance(exp, (int, float)):
-                            self._token_expires_in = int(exp - time.time())
-                        else:
-                            self._token_expires_in = TOKEN_MAX_AGE
-
-                    # Salvăm payload-ul complet
-                    self._user_data = payload
-
-                    # Cont principal (loggedInAccount)
-                    self._logged_in_account = logged_in
-                    self._crm_logged = str(
-                        logged_in.get("accountNumber", "")
-                    ).strip() or None
-
-                    # Cont vizualizat (viewedAccount)
-                    self._viewed_account = viewed
-                    self._crm_viewed = str(
-                        viewed.get("accountNumber", "")
-                    ).strip() or None
-
-                    # Conturi asociate — din loggedInAccount.associatedAccounts
-                    self._associated_accounts = logged_in.get("associatedAccounts", []) or []
-
-                    _LOGGER.info(
-                        "Login reușit: email=%s, crmLogged=%s, crmViewed=%s, "
-                        "asociate=%d",
-                        self._email,
-                        self._crm_logged,
-                        self._crm_viewed,
-                        len(self._associated_accounts),
+    async def _async_login_unlocked(self) -> bool:
+        """Login propriu-zis (apelat doar cu _auth_lock deținut)."""
+        try:
+            async with self._session.post(
+                URL_LOGIN,
+                json={"email": self._email, "password": self._password},
+                headers=HEADERS_BASE,
+                timeout=self._timeout,
+            ) as resp:
+                if resp.status != 200:
+                    if resp.status in (400, 401, 403):
+                        # Credențiale respinse — reîncercările automate nu ajută
+                        self._auth_rejected = True
+                    _LOGGER.error(
+                        "Login eșuat: status=%s, email=%s", resp.status, self._email
                     )
-                    return True
+                    return False
 
-            except Exception:
-                _LOGGER.exception("Eroare la login Nova API")
-                return False
+                data = await resp.json()
+                payload = data.get("data", {}) or {}
+
+                logged_in = payload.get("loggedInAccount", {}) or {}
+                viewed = payload.get("viewedAccount", {}) or {}
+                session_data = payload.get("session", {}) or {}
+
+                # Token — din data.session.token
+                self._access_token = session_data.get("token")
+                if not self._access_token:
+                    # Fallback: token la nivel root (compatibilitate)
+                    self._access_token = data.get("token")
+                if not self._access_token:
+                    # Fallback: cookie payload-token
+                    cookie = self._session.cookie_jar.filter_cookies(URL_LOGIN)
+                    pt = cookie.get("payload-token")
+                    if pt:
+                        self._access_token = pt.value
+
+                if not self._access_token:
+                    _LOGGER.error("Login reușit dar token absent din răspuns")
+                    return False
+
+                self._token_obtained_at = time.monotonic()
+                self._token_generation += 1
+                self._force_login = False
+                self._auth_rejected = False
+
+                # Calculăm expires_in din expireAt (epoch)
+                expire_at = session_data.get("expireAt")
+                if expire_at and isinstance(expire_at, (int, float)):
+                    self._token_expires_in = int(expire_at - time.time())
+                else:
+                    # Fallback: exp la nivel root (format APK)
+                    exp = data.get("exp")
+                    if exp and isinstance(exp, (int, float)):
+                        self._token_expires_in = int(exp - time.time())
+                    else:
+                        self._token_expires_in = TOKEN_MAX_AGE
+
+                # Salvăm payload-ul complet
+                self._user_data = payload
+
+                # Cont principal (loggedInAccount)
+                self._logged_in_account = logged_in
+                self._crm_logged = str(
+                    logged_in.get("accountNumber", "")
+                ).strip() or None
+
+                # Cont vizualizat (viewedAccount)
+                self._viewed_account = viewed
+                self._crm_viewed = str(
+                    viewed.get("accountNumber", "")
+                ).strip() or None
+
+                # Conturi asociate — din loggedInAccount.associatedAccounts
+                self._associated_accounts = logged_in.get("associatedAccounts", []) or []
+
+                _LOGGER.info(
+                    "Login reușit: email=%s, crmLogged=%s, crmViewed=%s, "
+                    "asociate=%d",
+                    self._email,
+                    self._crm_logged,
+                    self._crm_viewed,
+                    len(self._associated_accounts),
+                )
+                return True
+
+        except Exception:
+            _LOGGER.exception("Eroare la login Nova API")
+            return False
 
     async def async_ensure_authenticated(self) -> bool:
-        """Asigură un token valid. Re-login dacă e necesar."""
+        """Asigură un token valid. Re-login dacă e necesar.
+
+        Cererile paralele care găsesc token-ul expirat fac UN singur login
+        (înainte: câte unul per cerere).
+        """
         if self.is_token_valid():
             return True
-        return await self.async_login()
+        async with self._auth_lock:
+            if self.is_token_valid():
+                return True
+            return await self._async_login_unlocked()
 
     # ──────────────────────────────────────────
     # Helpers request
     # ──────────────────────────────────────────
 
+    async def _request(
+        self, method: str, url: str, params: dict | None = None, body: dict | None = None
+    ) -> Any:
+        """Cerere autentificată. Returnează JSON-ul sau ridică NovaApiError.
+
+        La 401 (token invalidat pe server înainte de expirare — ex: parolă
+        schimbată, sesiune închisă) se face re-login o dată și se reia cererea.
+        Înainte: cererea întorcea None, iar integrarea rămânea fără date până la
+        expirarea token-ului (până la 30 de zile).
+        """
+        for attempt in (1, 2):
+            if not await self.async_ensure_authenticated():
+                if self._auth_rejected:
+                    raise NovaAuthError("Nova a respins email-ul sau parola")
+                raise NovaApiError("Autentificare eșuată la Nova Power & Gas")
+            generation = self._token_generation
+            try:
+                async with self._session.request(
+                    method, url, headers=self._auth_headers(), params=params,
+                    json=body, timeout=self._timeout,
+                ) as resp:
+                    if resp.status == 200:
+                        return await resp.json(content_type=None)
+                    status = resp.status
+            except (asyncio.TimeoutError, aiohttp.ClientError, ValueError) as err:
+                raise NovaApiError(f"{method} {url}: {err}") from err
+
+            if status == 401 and attempt == 1:
+                _LOGGER.debug("%s %s → 401 — re-login și reîncercare", method, url)
+                async with self._auth_lock:
+                    # Alt apel paralel poate fi refăcut deja login-ul
+                    if self._token_generation == generation:
+                        self._force_login = True
+                continue
+            raise NovaApiError(f"{method} {url} → HTTP {status}")
+        raise NovaApiError(f"{method} {url} → HTTP 401")  # pragma: no cover
+
     async def _get(self, url: str, params: dict | None = None) -> Any:
-        """GET request autentificat. Returnează JSON parsed sau None."""
-        if not await self.async_ensure_authenticated():
-            return None
-        try:
-            async with self._session.get(
-                url, headers=self._auth_headers(), params=params, timeout=self._timeout
-            ) as resp:
-                if resp.status == 200:
-                    return await resp.json()
-                _LOGGER.warning("GET %s → %s", url, resp.status)
-                return None
-        except Exception:
-            _LOGGER.exception("Eroare GET %s", url)
-            return None
+        """GET autentificat (ridică NovaApiError la eșec)."""
+        return await self._request("GET", url, params=params)
 
     async def _post(self, url: str, body: dict | None = None) -> Any:
-        """POST request autentificat. Returnează JSON parsed sau None."""
-        if not await self.async_ensure_authenticated():
-            return None
-        try:
-            async with self._session.post(
-                url, headers=self._auth_headers(), json=body, timeout=self._timeout
-            ) as resp:
-                if resp.status == 200:
-                    return await resp.json()
-                _LOGGER.warning("POST %s → %s", url, resp.status)
-                return None
-        except Exception:
-            _LOGGER.exception("Eroare POST %s", url)
-            return None
+        """POST autentificat (ridică NovaApiError la eșec)."""
+        return await self._request("POST", url, body=body)
 
     # ──────────────────────────────────────────
     # Endpoint-uri date
@@ -476,7 +529,11 @@ class NovaApiClient:
             age = max(0.0, time.time() - wall)
             self._token_obtained_at = time.monotonic() - age
         else:
-            self._token_obtained_at = 0.0
+            # Înainte: obtained_at=0, care după o repornire recentă a sistemului
+            # (monotonic mic) făcea un token vechi să pară valid
+            self._token_obtained_at = time.monotonic()
+            self._force_login = True
+        self._token_generation += 1
 
     # ──────────────────────────────────────────
     # Aliasuri compatibilitate config_flow
@@ -484,12 +541,18 @@ class NovaApiClient:
 
     async def async_fetch_metering_points_list(self) -> list[dict] | None:
         """Alias pentru config_flow: returnează lista metering-points."""
-        result = await self.async_get_metering_points()
+        try:
+            result = await self.async_get_metering_points()
+        except NovaApiError:
+            return None
         return result if result else None
 
     async def async_fetch_contracts_list(self) -> list[dict] | None:
         """Alias pentru config_flow: returnează lista contracte."""
-        result = await self.async_get_contracts()
+        try:
+            result = await self.async_get_contracts()
+        except NovaApiError:
+            return None
         return result if result else None
 
     async def async_fetch_user_details(self) -> dict | None:
@@ -501,7 +564,10 @@ class NovaApiClient:
         if self._user_data:
             return self._user_data
         # Fallback: /accounts/me returnează Payload CMS standard
-        raw = await self._get(URL_ME)
+        try:
+            raw = await self._get(URL_ME)
+        except NovaApiError:
+            return None
         if raw and isinstance(raw, dict):
             user = raw.get("user", raw)
             # Mapăm câmpurile vechi (Payload CMS) pe structura nouă

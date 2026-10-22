@@ -11,6 +11,13 @@
           "password": "Parolă",
           "update_interval": "Interval de actualizare (secunde)"
         }
+      },
+      "reauth_confirm": {
+        "title": "Nova Power & Gas — autentificare din nou",
+        "description": "Nova a respins parola salvată pentru {username}. Introdu parola actuală.",
+        "data": {
+          "password": "Parolă"
+        }
       }
     },
     "error": {
@@ -18,7 +25,8 @@
       "no_data": "Autentificare reușită, dar nu au fost găsite date asociate acestui cont."
     },
     "abort": {
-      "already_configured": "Acest cont Nova Power & Gas este deja configurat."
+      "already_configured": "Acest cont Nova Power & Gas este deja configurat.",
+      "reauth_successful": "Reautentificare reușită."
     }
   },
   "options": {
@@ -58,7 +66,8 @@
       "license_key_expired": "Această cheie de licență a expirat.",
       "license_fingerprint_mismatch": "Această cheie de licență este asociată altei instalări.",
       "license_network_error": "Nu se poate conecta la serverul de licențe. Verifică conexiunea la internet.",
-      "license_server_error": "Eroare server licențe. Încearcă din nou mai târziu."
+      "license_server_error": "Eroare server licențe. Încearcă din nou mai târziu.",
+      "already_configured": "Acest cont este deja configurat într-o altă intrare."
     }
   },
   "issues": {

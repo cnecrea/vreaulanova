@@ -27,9 +27,10 @@ from datetime import datetime, timedelta
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
+from homeassistant.exceptions import ConfigEntryAuthFailed
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 
-from .api import NovaApiClient
+from .api import NovaApiClient, NovaApiError, NovaAuthError
 from .const import DEFAULT_UPDATE_INTERVAL, DOMAIN, HEAVY_UPDATE_MULTIPLIER, LICENSE_DATA_KEY, MONTHS_EN
 
 _LOGGER = logging.getLogger(__name__)
@@ -56,6 +57,9 @@ class NovaCoordinator(DataUpdateCoordinator):
         self.config_entry = config_entry
         self._refresh_count: int = 0
         self._last_persisted_token: str | None = None
+        # Revenirea pe contul principal a eșuat → sesiunea de pe server a rămas
+        # pe un cont asociat; următoarea actualizare revine întâi pe contul principal.
+        self._session_on_other_account: bool = False
 
     @property
     def _is_heavy(self) -> bool:
@@ -88,16 +92,31 @@ class NovaCoordinator(DataUpdateCoordinator):
             "metering_points", "metering_points_sr",
             "invoices", "balances", "self_readings", "contracts",
         ]
-        mp_primary = essential[0] if not isinstance(essential[0], Exception) else []
-        mp_self_readings = essential[1] if not isinstance(essential[1], Exception) else []
-        invoices_raw = essential[2] if not isinstance(essential[2], Exception) else None
-        balances_raw = essential[3] if not isinstance(essential[3], Exception) else None
-        self_readings = essential[4] if not isinstance(essential[4], Exception) else []
-        contracts = essential[5] if not isinstance(essential[5], Exception) else []
+        failed = {
+            label for label, result in zip(labels, essential) if isinstance(result, Exception)
+        }
+        for label, result in zip(labels, essential):
+            if isinstance(result, Exception):
+                if not isinstance(result, NovaApiError):
+                    raise result
+                _LOGGER.warning("Eroare la %s (cont %s): %s", label, crm, result)
+        if failed == set(labels):
+            # Nova nu răspunde: entitățile devin indisponibile și își păstrează
+            # ultimele valori (înainte: datele erau înlocuite cu liste goale →
+            # sold 0, nicio factură, contoare dispărute).
+            raise UpdateFailed(f"Nova Power & Gas nu a răspuns (cont {crm})")
 
-        for i, label in enumerate(labels):
-            if isinstance(essential[i], Exception):
-                _LOGGER.warning("Eroare la %s (cont %s): %s", label, crm, essential[i])
+        # Un endpoint care nu a răspuns acum nu golește datele: se păstrează cele anterioare
+        mp_primary = (
+            prev_acct.get("metering_points", []) if "metering_points" in failed else essential[0]
+        )
+        mp_self_readings = [] if "metering_points_sr" in failed else essential[1]
+        invoices_raw = None if "invoices" in failed else essential[2]
+        balances_raw = None if "balances" in failed else essential[3]
+        self_readings = (
+            prev_acct.get("self_readings", []) if "self_readings" in failed else essential[4]
+        )
+        contracts = prev_acct.get("contracts", []) if "contracts" in failed else essential[5]
 
         # ── Merge metering points: /metering-points + /metering-points/self-readings ──
         # /self-readings poate conține MP-uri extra (ex: LC vechi) sau meters populate
@@ -161,19 +180,27 @@ class NovaCoordinator(DataUpdateCoordinator):
                         _LOGGER.warning(
                             "Eroare agreement %s (cont %s): %s", mp_id, crm, result
                         )
+                        old = prev_acct.get("agreements", {}).get(mp_id)
+                        if old:
+                            agreements[mp_id] = old
                     elif result:
                         agreements[mp_id] = result
 
         # ── Payments (doar la heavy refresh) ──
+        payments = prev_acct.get("payments", [])
         if is_heavy:
-            payments = await self.api.async_get_payments()
-        else:
-            payments = prev_acct.get("payments", [])
+            try:
+                payments = await self.api.async_get_payments()
+            except NovaApiError as err:
+                _LOGGER.warning("Eroare la payments (cont %s): %s", crm, err)
 
         # ── Procesare invoices ──
         invoices = []
         balance = {"total": 0, "prosumer": 0}
-        if invoices_raw and isinstance(invoices_raw, dict):
+        if "invoices" in failed:
+            invoices = prev_acct.get("invoices", [])
+            balance = prev_acct.get("balance", balance)
+        elif invoices_raw and isinstance(invoices_raw, dict):
             invoices = invoices_raw.get("invoices", [])
             balance = invoices_raw.get("balance", balance)
 
@@ -237,121 +264,155 @@ class NovaCoordinator(DataUpdateCoordinator):
         try:
             # Asigurăm autentificarea
             if not await self.api.async_ensure_authenticated():
+                if self.api.auth_rejected:
+                    # Parolă schimbată: HA cere reautentificarea (fără reîncercări inutile)
+                    raise ConfigEntryAuthFailed("Nova a respins email-ul sau parola")
                 raise UpdateFailed("Autentificare eșuată la Nova Power & Gas")
 
-            # ── Date globale (nu depind de cont) ──
-            app_info = None
-            try:
-                app_info = await self.api.async_get_app_info()
-            except Exception as err:
-                _LOGGER.warning("Eroare la app_info: %s", err)
+            # Toate comutările de cont (și trimiterea indexului) folosesc aceeași
+            # sesiune de pe server → se serializează prin account_lock.
+            async with self.api.account_lock:
+                return await self._async_fetch_all(is_heavy)
 
-            current_month_key = MONTHS_EN[datetime.now().month - 1]
-
-            # ── Fetch contul principal (vizualizat după login) ──
-            accounts_data: dict[str, dict] = {}
-            primary_crm = self.api.crm_viewed_account or self.api.crm_logged_account or ""
-            logged_crm = self.api.crm_logged_account or primary_crm
-
-            if primary_crm:
-                # Numele contului principal
-                primary_name = ""
-                viewed = self.api.viewed_account
-                if viewed and isinstance(viewed, dict):
-                    primary_name = viewed.get("accountName", "")
-                if not primary_name:
-                    logged_in = self.api.logged_in_account
-                    if logged_in and isinstance(logged_in, dict):
-                        primary_name = logged_in.get("accountName", "")
-
-                primary_data = await self._fetch_account_data(
-                    primary_crm, primary_name, is_heavy
-                )
-                accounts_data[primary_crm] = primary_data
-
-            # ── Fetch conturi asociate (switch → fetch → switch înapoi) ──
-            associated = self.api.associated_accounts or []
-            switched = False
-
-            try:
-                for aa in associated:
-                    aa_crm = str(aa.get("accountNumber", "")).strip()
-                    if not aa_crm or aa_crm in accounts_data:
-                        continue  # Deja extras sau CRM invalid
-
-                    _LOGGER.debug(
-                        "Switch la contul asociat: %s (%s)",
-                        aa.get("accountName", "?"), aa_crm,
-                    )
-
-                    switch_result = await self.api.async_switch_account(aa)
-                    if switch_result:
-                        switched = True
-                        aa_name = aa.get("accountName", "")
-                        aa_data = await self._fetch_account_data(aa_crm, aa_name, is_heavy)
-                        accounts_data[aa_crm] = aa_data
-                    else:
-                        _LOGGER.warning(
-                            "Switch eșuat la contul asociat %s (%s)",
-                            aa.get("accountName", "?"), aa_crm,
-                        )
-            finally:
-                # ── Revenire la contul principal (ALWAYS — inclusiv pe excepție) ──
-                if switched and logged_crm:
-                    logged_in = self.api.logged_in_account or {}
-                    _LOGGER.debug("Revenire la contul principal: %s", logged_crm)
-                    try:
-                        await self.api.async_switch_account({
-                            "accountName": logged_in.get("accountName", ""),
-                            "accountNumber": logged_in.get("accountNumber", ""),
-                            "accountId": logged_in.get("accountId", ""),
-                        })
-                    except Exception as sw_err:
-                        _LOGGER.error(
-                            "Eroare la revenirea pe contul principal %s: %s",
-                            logged_crm, sw_err,
-                        )
-
-            # Incrementăm counter
-            self._refresh_count += 1
-
-            # Persistăm token
-            self._persist_token()
-
-            total_mp = sum(
-                len(a.get("metering_points", [])) for a in accounts_data.values()
-            )
-            total_balance = sum(
-                a.get("balance", {}).get("total", 0) for a in accounts_data.values()
-            )
-            _LOGGER.debug(
-                "Actualizare finalizată: %d conturi, %d puncte măsurare total, "
-                "balance total=%.2f Lei",
-                len(accounts_data), total_mp, total_balance,
-            )
-
-            return {
-                # Date per cont
-                "accounts_data": accounts_data,
-
-                # Date globale
-                "app_info": app_info,
-                "current_month_key": current_month_key,
-
-                # User info (metadate sesiune)
-                "crm_logged": self.api.crm_logged_account,
-                "crm_viewed": self.api.crm_viewed_account,
-                "user_data": self.api.user_data,
-                "logged_in_account": self.api.logged_in_account,
-                "viewed_account": self.api.viewed_account,
-                "associated_accounts": self.api.associated_accounts,
-            }
-
-        except UpdateFailed:
+        except (UpdateFailed, ConfigEntryAuthFailed):
             raise
+        except NovaAuthError as err:
+            raise ConfigEntryAuthFailed(str(err)) from err
+        except NovaApiError as err:
+            raise UpdateFailed(f"Eroare la actualizare Nova: {err}") from err
         except Exception as err:
             _LOGGER.exception("Eroare la actualizare Nova: %s", err)
             raise UpdateFailed(f"Eroare la actualizare Nova: {err}") from err
+
+    async def _async_switch_to_primary(self) -> bool:
+        """Revine pe contul principal (loggedInAccount). Returnează True la succes."""
+        logged_in = self.api.logged_in_account or {}
+        try:
+            result = await self.api.async_switch_account({
+                "accountName": logged_in.get("accountName", ""),
+                "accountNumber": logged_in.get("accountNumber", ""),
+                "accountId": logged_in.get("accountId", ""),
+            })
+        except NovaApiError as err:
+            _LOGGER.error("Eroare la revenirea pe contul principal: %s", err)
+            return False
+        return bool(result)
+
+    async def _async_fetch_all(self, is_heavy: bool) -> dict:
+        """Extrage datele tuturor conturilor (apelat cu account_lock deținut)."""
+        if self._session_on_other_account:
+            # Altfel datele contului principal ar fi citite de pe alt cont
+            if not await self._async_switch_to_primary():
+                raise UpdateFailed(
+                    "Sesiunea Nova a rămas pe un cont asociat și revenirea a eșuat"
+                )
+            self._session_on_other_account = False
+
+        # ── Date globale (nu depind de cont) ──
+        app_info = None
+        try:
+            app_info = await self.api.async_get_app_info()
+        except Exception as err:
+            _LOGGER.warning("Eroare la app_info: %s", err)
+
+        current_month_key = MONTHS_EN[datetime.now().month - 1]
+
+        # ── Fetch contul principal (vizualizat după login) ──
+        accounts_data: dict[str, dict] = {}
+        primary_crm = self.api.crm_viewed_account or self.api.crm_logged_account or ""
+        logged_crm = self.api.crm_logged_account or primary_crm
+
+        if primary_crm:
+            # Numele contului principal
+            primary_name = ""
+            viewed = self.api.viewed_account
+            if viewed and isinstance(viewed, dict):
+                primary_name = viewed.get("accountName", "")
+            if not primary_name:
+                logged_in = self.api.logged_in_account
+                if logged_in and isinstance(logged_in, dict):
+                    primary_name = logged_in.get("accountName", "")
+
+            primary_data = await self._fetch_account_data(
+                primary_crm, primary_name, is_heavy
+            )
+            accounts_data[primary_crm] = primary_data
+
+        # ── Fetch conturi asociate (switch → fetch → switch înapoi) ──
+        associated = self.api.associated_accounts or []
+        prev_accounts = (self.data or {}).get("accounts_data", {})
+        switched = False
+
+        try:
+            for aa in associated:
+                aa_crm = str(aa.get("accountNumber", "")).strip()
+                if not aa_crm or aa_crm in accounts_data:
+                    continue  # Deja extras sau CRM invalid
+
+                _LOGGER.debug(
+                    "Switch la contul asociat: %s (%s)",
+                    aa.get("accountName", "?"), aa_crm,
+                )
+
+                try:
+                    switch_result = await self.api.async_switch_account(aa)
+                    if not switch_result:
+                        raise NovaApiError("răspuns gol la switch")
+                    switched = True
+                    aa_name = aa.get("accountName", "")
+                    accounts_data[aa_crm] = await self._fetch_account_data(
+                        aa_crm, aa_name, is_heavy
+                    )
+                except (NovaApiError, UpdateFailed) as err:
+                    # Un cont asociat indisponibil nu oprește actualizarea
+                    # celorlalte: își păstrează datele anterioare.
+                    _LOGGER.warning(
+                        "Contul asociat %s (%s) nu a putut fi actualizat: %s",
+                        aa.get("accountName", "?"), aa_crm, err,
+                    )
+                    if aa_crm in prev_accounts:
+                        accounts_data[aa_crm] = prev_accounts[aa_crm]
+        finally:
+            # ── Revenire la contul principal (ALWAYS — inclusiv pe excepție) ──
+            if switched and logged_crm:
+                _LOGGER.debug("Revenire la contul principal: %s", logged_crm)
+                if not await self._async_switch_to_primary():
+                    self._session_on_other_account = True
+
+        # Incrementăm counter
+        self._refresh_count += 1
+
+        # Persistăm token
+        self._persist_token()
+
+        total_mp = sum(
+            len(a.get("metering_points", [])) for a in accounts_data.values()
+        )
+        total_balance = sum(
+            a.get("balance", {}).get("total", 0) for a in accounts_data.values()
+        )
+        _LOGGER.debug(
+            "Actualizare finalizată: %d conturi, %d puncte măsurare total, "
+            "balance total=%.2f Lei",
+            len(accounts_data), total_mp, total_balance,
+        )
+
+        return {
+            # Date per cont
+            "accounts_data": accounts_data,
+
+            # Date globale
+            "app_info": app_info,
+            "current_month_key": current_month_key,
+
+            # User info (metadate sesiune)
+            "crm_logged": self.api.crm_logged_account,
+            "crm_viewed": self.api.crm_viewed_account,
+            "user_data": self.api.user_data,
+            "logged_in_account": self.api.logged_in_account,
+            "viewed_account": self.api.viewed_account,
+            "associated_accounts": self.api.associated_accounts,
+        }
 
     def _persist_token(self) -> None:
         """Salvează token-ul în config_entry doar dacă s-a schimbat."""

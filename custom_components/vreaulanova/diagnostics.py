@@ -25,12 +25,14 @@ async def async_get_config_entry_diagnostics(
 ) -> dict[str, Any]:
     """Returnează datele de diagnostic pentru Nova Power & Gas."""
 
-    # ── Licență (fingerprint + cheie mascată) ──
+    # ── Licență (fingerprint TRUNCHIAT + cheie mascată) ──
+    # Fingerprint-ul complet NU apare în diagnostic: diagnosticele se atașează la
+    # issue-uri publice, iar serverul de licențe acceptă cereri semnate cu fingerprint.
     license_mgr = hass.data.get(DOMAIN, {}).get(LICENSE_DATA_KEY)
     licenta_info: dict[str, Any] = {}
     if license_mgr:
         licenta_info = {
-            "fingerprint": license_mgr.fingerprint,
+            "fingerprint": license_mgr.fingerprint[:16] + "...",
             "status": license_mgr.status,
             "license_key": license_mgr.license_key_masked,
             "is_valid": license_mgr.is_valid,
@@ -49,11 +51,14 @@ async def async_get_config_entry_diagnostics(
         data = coordinator.data or {}
         coordinator_info["crm_logged"] = data.get("crm_logged")
         coordinator_info["crm_viewed"] = data.get("crm_viewed")
-        coordinator_info["metering_points_count"] = len(
-            data.get("metering_points", [])
+        # Datele sunt per cont (înainte se citeau chei inexistente → mereu 0)
+        accounts = list((data.get("accounts_data") or {}).values())
+        coordinator_info["accounts_count"] = len(accounts)
+        coordinator_info["metering_points_count"] = sum(
+            len(a.get("metering_points", [])) for a in accounts
         )
-        coordinator_info["invoices_count"] = len(data.get("invoices", []))
-        coordinator_info["contracts_count"] = len(data.get("contracts", []))
+        coordinator_info["invoices_count"] = sum(len(a.get("invoices", [])) for a in accounts)
+        coordinator_info["contracts_count"] = sum(len(a.get("contracts", [])) for a in accounts)
 
     # ── Senzori activi ──
     senzori_activi = sorted(
@@ -79,7 +84,10 @@ async def async_get_config_entry_diagnostics(
     # ── Config entry (fără date sensibile) ──
     return {
         "intrare": {
-            "titlu": entry.title,
+            "titlu": entry.title.replace(
+                entry.data.get("username", "") or "\0",
+                _mascheaza_email(entry.data.get("username", "")),
+            ),
             "versiune": entry.version,
             "domeniu": DOMAIN,
             "username": _mascheaza_email(entry.data.get("username", "")),
