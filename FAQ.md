@@ -56,7 +56,7 @@ Dacă locul devine activ (primește CLC/POD), integrarea observă la următoarea
 [↑ Înapoi la cuprins](#top)
 
 - **Locul nu are CLC/POD** — vezi întrebarea anterioară; nu are contor la Nova.
-- **Locul nu are nicio autocitire în istoric** — în afara perioadei de citire Nova nu trimite contoarele; integrarea le reconstruiește din ultima autocitire. Un loc nou, fără nicio autocitire, primește indexul după prima perioadă de citire (integrarea se reîncarcă singură).
+- **Locul nu are nicio autocitire în istoric** — în afara perioadei de citire Nova nu trimite contoarele; integrarea le reconstruiește din ultima autocitire. Un loc fără nicio autocitire primește senzorul de index când Nova trimite contorul, în perioada de citire (integrarea se reîncarcă singură). Butonul „Trimite index” există oricum pentru orice loc activ.
 
 În afara perioadei de citire, indexul afișat este cel din ultima autocitire (atributul „Sursa indexului" spune de unde vine).
 
@@ -108,7 +108,7 @@ Vin din raportul Nova „consum și costuri" (același din myaccount.nova-energy
 - **Consum lunar** — consumul ultimei luni care are consum înregistrat (m³ sau kWh); în atribute: media lunară, totalul și fiecare lună din ultimele 12.
 - **Cost lunar** — costul ultimei luni facturate (lei), cu aceeași structură.
 
-Ultima lună cu cost poate fi mai nouă decât ultima lună cu consum: Nova facturează uneori o lună înainte să înregistreze consumul ei. Raportul se actualizează la fiecare a 6-a actualizare (≈ 6 ore). Senzorii apar doar pentru locurile pentru care Nova oferă raportul.
+Ultima lună cu cost poate fi diferită de ultima lună cu consum (raportul Nova poate avea costul unei luni înaintea consumului ei), de aceea fiecare senzor își arată luna în atributul „Luna". Raportul se actualizează la fiecare a 6-a actualizare (≈ 6 ore). Senzorii apar doar pentru locurile pentru care Nova oferă raportul.
 
 ---
 
