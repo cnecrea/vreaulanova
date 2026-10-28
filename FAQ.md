@@ -1,275 +1,191 @@
 <a name="top"></a>
 # Întrebări frecvente
 
-- [Cum adaug integrarea în Home Assistant?](#cum-adaug-integrarea-în-home-assistant)
-- [Am mai multe conturi CRM asociate. Sunt descoperite automat?](#am-mai-multe-conturi-crm-asociate-sunt-descoperite-automat)
-- [Ce senzori primesc per cont?](#ce-senzori-primesc-per-cont)
-- [Ce înseamnă „Sold total"?](#ce-înseamnă-sold-total)
-- [Ce înseamnă senzorul „Citire permisă"?](#ce-înseamnă-senzorul-citire-permisă)
-- [Nu îmi apare indexul curent. De ce?](#nu-îmi-apare-indexul-curent-de-ce)
-- [Ce înseamnă senzorul „Factură restantă"?](#ce-înseamnă-senzorul-factură-restantă)
-- [Ce înseamnă senzorul „Revizie tehnică"?](#ce-înseamnă-senzorul-revizie-tehnică)
-- [Nu sunt prosumator. Senzorul de prosumator lipsește — e normal?](#nu-sunt-prosumator-senzorul-de-prosumator-lipsește--e-normal)
-- [De ce entitățile au un nume lung, cu codul CRM inclus?](#de-ce-entitățile-au-un-nume-lung-cu-codul-crm-inclus)
-- [Vreau să trimit indexul automat. De ce am nevoie?](#vreau-să-trimit-indexul-automat-de-ce-am-nevoie)
-- [Ce e licența și de ce am nevoie de ea?](#ce-e-licența-și-de-ce-am-nevoie-de-ea)
-- [Am introdus licența dar senzorii tot arată „Licență necesară". De ce?](#am-introdus-licența-dar-senzorii-tot-arată-licență-necesară-de-ce)
-- [Am schimbat opțiunile integrării. Trebuie să restartez?](#am-schimbat-opțiunile-integrării-trebuie-să-restartez)
-- [Trebuie să șterg și readaug integrarea la actualizare?](#trebuie-să-șterg-și-readaug-integrarea-la-actualizare)
-- [Îmi place proiectul. Cum pot să-l susțin?](#îmi-place-proiectul-cum-pot-să-l-susțin)
+- [Integrarea nu mai funcționează („Login eșuat", HTTP 404). Ce fac?](#integrarea-nu-mai-funcționează-login-eșuat-http-404-ce-fac)
+- [Am mai multe conturi asociate. Sunt descoperite automat?](#am-mai-multe-conturi-asociate-sunt-descoperite-automat)
+- [După actualizare a dispărut un loc de consum. De ce?](#după-actualizare-a-dispărut-un-loc-de-consum-de-ce)
+- [Nu îmi apare „Index contor" sau butonul „Trimite index". De ce?](#nu-îmi-apare-index-contor-sau-butonul-trimite-index-de-ce)
+- [Ce helper trebuie să creez pentru trimiterea indexului?](#ce-helper-trebuie-să-creez-pentru-trimiterea-indexului)
+- [Am apăsat „Trimite index". Cum aflu dacă a mers?](#am-apăsat-trimite-index-cum-aflu-dacă-a-mers)
+- [„Citire permisă" arată „Nu", deși Nova a prelungit perioada. De ce?](#citire-permisă-arată-nu-deși-nova-a-prelungit-perioada-de-ce)
+- [Ce arată „Consum lunar" și „Cost lunar"?](#ce-arată-consum-lunar-și-cost-lunar)
+- [Pot folosi indexul în panoul Energie?](#pot-folosi-indexul-în-panoul-energie)
+- [Cum primesc o notificare înainte de scadența facturii?](#cum-primesc-o-notificare-înainte-de-scadența-facturii)
+- [Ce înseamnă „Revizie tehnică"?](#ce-înseamnă-revizie-tehnică)
+- [Nu am senzorul „Sold prosumator". E normal?](#nu-am-senzorul-sold-prosumator-e-normal)
+- [Am introdus licența, dar tot apare „Licență necesară". De ce?](#am-introdus-licența-dar-tot-apare-licență-necesară-de-ce)
+- [Trebuie să șterg și să readaug integrarea la actualizare?](#trebuie-să-șterg-și-să-readaug-integrarea-la-actualizare)
+- [Cum raportez o problemă?](#cum-raportez-o-problemă)
+- [Îmi place proiectul. Cum îl pot susține?](#îmi-place-proiectul-cum-îl-pot-susține)
 
 ---
 
-## Cum adaug integrarea în Home Assistant?
+## Integrarea nu mai funcționează („Login eșuat", HTTP 404). Ce fac?
 
 [↑ Înapoi la cuprins](#top)
 
-Ai nevoie de HACS (Home Assistant Community Store) instalat. Dacă nu-l ai, urmează [ghidul oficial HACS](https://hacs.xyz/docs/use).
+Actualizează la **2.0.0** sau mai nou. În octombrie 2026, Nova a trecut la o platformă nouă (myaccount.nova-energy.ro), iar vechiul server la care se conectau versiunile 1.x a fost oprit — răspunde cu 404 la orice cerere, inclusiv la login. Parola ta nu are nicio problemă.
 
-1. În Home Assistant, mergi la **HACS** → cele **trei puncte** din dreapta sus → **Custom repositories**.
-2. Introdu URL-ul: `https://github.com/cnecrea/vreaulanova` și selectează tipul **Integration**.
-3. Apasă **Add**, apoi caută **Nova Power & Gas** în HACS și instalează.
-4. Repornește Home Assistant.
-5. Mergi la **Setări** → **Dispozitive și Servicii** → **Adaugă Integrare** → caută **Nova Power & Gas** și urmează pașii de configurare.
-
-Detalii complete în [SETUP.md](./SETUP.md).
+După actualizare și repornire, integrarea se conectează singură la platforma nouă, cu aceleași entități și același istoric.
 
 ---
 
-## Am mai multe conturi CRM asociate. Sunt descoperite automat?
+## Am mai multe conturi asociate. Sunt descoperite automat?
 
 [↑ Înapoi la cuprins](#top)
 
-Da. Integrarea folosește endpoint-ul web `/accounts/login/client` care returnează lista completă de conturi asociate (`associatedAccounts`). La fiecare ciclu de actualizare, coordinator-ul:
+Da. La login, Nova trimite lista conturilor asociate; integrarea citește datele fiecăruia și le creează device-urile, fără nicio selecție manuală. Fiecare loc de consum activ devine un device separat, de exemplu:
 
-1. Extrage datele contului principal (cel cu care ești logat)
-2. Face switch la fiecare cont asociat → extrage datele → switch înapoi
-
-Toate conturile CRM descoperite generează device-uri și senzori proprii, fără intervenție manuală. De exemplu, dacă ai contul principal `1234567` (gaz) și un cont asociat `7654321` (gaz + electricitate), vei avea 3 device-uri:
-- Nova Power & Gas (1234567) Gaz
-- Nova Power & Gas (7654321) Gaz
-- Nova Power & Gas (7654321) Energie Electrică
+- Nova Power & Gas (1234567) LC-00202600 Gaz
+- Nova Power & Gas (7654321) LC-00123456 Energie Electrică
 
 ---
 
-## Ce senzori primesc per cont?
+## După actualizare a dispărut un loc de consum. De ce?
 
 [↑ Înapoi la cuprins](#top)
 
-Pentru fiecare cont CRM și fiecare utilitate (gaz / electricitate), se creează:
+Nova trimite uneori și locuri **fără cod CLC/POD** — locuri vechi sau neactivate, fără contract activ, facturi, contor sau autocitiri. Senzorii lor afișau doar zerouri și „Nedefinit", iar butonul era „Indisponibil". Din 2.0.0 aceste locuri nu mai primesc device; cele create de versiunile anterioare se șterg la prima pornire.
 
-**Senzori per utilitate** (sub fiecare device):
-- **Sold total** — suma în RON
-- **Citire permisă** — Da / Nu
-- **Arhivă facturi** — nr facturi pe anul curent, cu sume în atribute
-- **Arhivă plăți** — nr plăți pe anul curent, cu sume în atribute
-- **Date contract** — status (Activ / Inactiv), cu detalii contract în atribute
-- **Convenție consum** — nr luni cu convenție, cu valori per lună în atribute
-- **Factură restantă** — Da / Nu, cu total restantă în atribute
-
-**Senzori per contor** (per meter series):
-- **Index contor** — valoarea indexului curent (m³ / kWh), cu ultima citire și consum în atribute
-
-**Senzori condiționali**:
-- **Sold prosumator** — apare doar dacă există contracte prosumator
-- **Revizie tehnică** — apare doar pentru utilitatea gaz (Validă / Expirată / Nedefinit)
-
-**Buton**:
-- **Trimite index** — un buton per contor, trimite autocitirea la API
+Dacă locul devine activ (primește CLC/POD), integrarea observă la următoarea actualizare și se reîncarcă singură pentru a-l adăuga. Locurile ignorate apar în [diagnostic](DEBUG.md#diagnosticul) la `locuri_inactive_ignorate`.
 
 ---
 
-## Ce înseamnă „Sold total"?
+## Nu îmi apare „Index contor" sau butonul „Trimite index". De ce?
 
 [↑ Înapoi la cuprins](#top)
 
-Senzorul „Sold total" (`sensor.vreaulanova_{crm}_{ut}_sold_total`) afișează suma în RON pe care o ai de plătit sau credit pe care îl ai. Valoarea vine de la endpoint-ul `/balances` (câmpul `balance`).
+- **Locul nu are CLC/POD** — vezi întrebarea anterioară; nu are contor la Nova.
+- **Locul nu are nicio autocitire în istoric** — în afara perioadei de citire Nova nu trimite contoarele; integrarea le reconstruiește din ultima autocitire. Un loc nou, fără nicio autocitire, primește indexul după prima perioadă de citire (integrarea se reîncarcă singură).
 
-Este un senzor cu device_class `monetary` și state_class `total`, deci poate fi folosit în statistici și grafice HA.
+În afara perioadei de citire, indexul afișat este cel din ultima autocitire (atributul „Sursa indexului" spune de unde vine).
 
 ---
 
-## Ce înseamnă senzorul „Citire permisă"?
+## Ce helper trebuie să creez pentru trimiterea indexului?
 
 [↑ Înapoi la cuprins](#top)
 
-Senzorul „Citire permisă" (`sensor.vreaulanova_{crm}_{ut}_citire_permisa`) indică dacă trimiterea autocitirilor este activă pe platforma Nova. Valoarea vine din `app_info.selfReadingsEnabled` — un flag global setat de Nova.
+ID-ul exact este în atributul **Helper index** al butonului „Trimite index" (sau al senzorului „Index contor"), de exemplu:
 
-- **Da** — autocitirile sunt acceptate
-- **Nu** — autocitirile sunt dezactivate de Nova (temporar sau permanent)
-
-**Observație**: Spre deosebire de E·ON (unde citirea permisă depinde de perioada de citire per contract), la Nova acest indicator este global — nu per punct de măsurare.
-
----
-
-## Nu îmi apare indexul curent. De ce?
-
-[↑ Înapoi la cuprins](#top)
-
-Indexul curent vine de la endpoint-ul `/metering-points` și depinde de ce returnează API-ul Nova. Dacă senzorul afișează `None` sau nu are valoare:
-
-1. Verifică atributele senzorului — ar trebui să vezi „Ultima citire", „Consum", „Data ultima citire", „Index vechi"
-2. Dacă atributele sunt toate `None`, API-ul Nova nu furnizează date de contor pentru acel punct de măsurare
-3. Activează debug logging ([DEBUG.md](DEBUG.md)) și verifică răspunsul endpoint-ului `metering_points`
-
-Dacă ești client nou sau contorul nu a fost citit niciodată, e posibil ca API-ul să nu aibă date.
-
----
-
-## Ce înseamnă senzorul „Factură restantă"?
-
-[↑ Înapoi la cuprins](#top)
-
-Senzorul „Factură restantă" (`sensor.vreaulanova_{crm}_{ut}_factura_restanta`) indică dacă ai facturi neachitate:
-
-- **Da** — ai facturi cu status `unpaid` sau `pastDue`
-- **Nu** — toate facturile sunt achitate
-
-Atribute disponibile:
-- **Total restantă** — suma totală neachitată (RON)
-- **Scadență ultima factură** — data scadenței celei mai recente facturi
-- **Facturi neachitate** — numărul de facturi neachitate
-
----
-
-## Ce înseamnă senzorul „Revizie tehnică"?
-
-[↑ Înapoi la cuprins](#top)
-
-Senzorul „Revizie tehnică" (`sensor.vreaulanova_{crm}_gaz_revizie_tehnica`) apare doar pentru utilitatea gaz și arată starea reviziei tehnice a instalației:
-
-- **Validă** — revizia tehnică nu a expirat (data expirării este în viitor)
-- **Expirată** — revizia tehnică a expirat (data expirării este în trecut)
-- **Nedefinit** — nu există date despre revizie în API
-
-Atribute:
-- Data ultimei revizii, Data următoarei revizii
-- Data ultimei verificări, Data următoarei verificări
-
----
-
-## Nu sunt prosumator. Senzorul de prosumator lipsește — e normal?
-
-[↑ Înapoi la cuprins](#top)
-
-Da, absolut normal. Senzorul „Sold prosumator" se creează doar dacă în contractele returnate de API există cel puțin un contract cu `prosumerContract = true`. Dacă nu ești prosumator, senzorul pur și simplu nu este creat — nu e o eroare.
-
----
-
-## De ce entitățile au un nume lung, cu codul CRM inclus?
-
-[↑ Înapoi la cuprins](#top)
-
-Integrarea setează manual `entity_id`-ul fiecărei entități, incluzând codul CRM, utilitatea și (pentru index) seria contorului. Formatul general este:
-
-- `sensor.vreaulanova_{crm}_{utilitate}_{tip_senzor}`
-- `button.vreaulanova_{crm}_{utilitate}_trimite_index`
-
-De exemplu, pentru un cont CRM `1234567` cu utilitate gaz:
-- `sensor.vreaulanova_1234567_gaz_sold_total`
-- `sensor.vreaulanova_1234567_gaz_date_contract`
-- `sensor.vreaulanova_1234567_gaz_factura_restanta`
-- `button.vreaulanova_1234567_gaz_trimite_index`
-
-Avantajul principal: dacă ai mai multe conturi CRM cu mai multe utilități, fiecare entitate are un ID unic, fără conflicte.
-
----
-
-## Vreau să trimit indexul automat. De ce am nevoie?
-
-[↑ Înapoi la cuprins](#top)
-
-Două lucruri:
-
-**1. Entitate `input_number`** — Butonul de trimitere citește valoarea din:
 ```
-input_number.vreaulanova_{clc_pod}_{series}_index
+input_number.vreaulanova_dgsvlrvl12345678_abc_12345678_2021_index
 ```
-Această entitate trebuie creată manual în `configuration.yaml`. Valorile `clc_pod` (specificIdForUtilityType) și `series` (seria contorului) le găsești în logurile de debug sau în atributele senzorilor.
 
-**2. Citire permisă = Da** — API-ul Nova trebuie să accepte autocitiri (`selfReadingsEnabled = true`).
+Creează un helper **Număr** din **Setări** → **Dispozitive și servicii** → **Ajutoare** și setează-i exact acest **ID entitate**, sau adaugă-l în `configuration.yaml` (vezi [README](README.md#trimiterea-indexului)). ID-ul e scris cu litere mici: „/" și „-" din seria contorului devin „_".
 
-Exemplu de automatizare:
+---
+
+## Am apăsat „Trimite index". Cum aflu dacă a mers?
+
+[↑ Înapoi la cuprins](#top)
+
+Rezultatul apare în **notificările din bara laterală** (clopoțelul):
+
+- **index trimis** — valoarea, contorul, locul și ora, plus mesajul Nova;
+- **indexul nu a fost trimis** — motivul: perioada de autocitire e închisă (cu intervalul și anunțurile Nova), helperul lipsește sau nu are valoare, sau mesajul cu care Nova a refuzat indexul (de exemplu un index mai mic decât cel curent).
+
+Fiecare loc are o singură notificare, înlocuită la apăsarea următoare.
+
+---
+
+## „Citire permisă" arată „Nu", deși Nova a prelungit perioada. De ce?
+
+[↑ Înapoi la cuprins](#top)
+
+Senzorul se actualizează la intervalul integrării (implicit o oră), deci poate rămâne în urmă puțin timp. Prelungirile apar în atributele lui, ca „Anunț Nova". Butonul **verifică perioada direct la Nova în momentul apăsării**, deci poți trimite indexul chiar dacă senzorul nu s-a actualizat încă.
+
+Perioada de autocitire e stabilită de Nova pentru toată platforma, nu pentru fiecare loc de consum.
+
+---
+
+## Ce arată „Consum lunar" și „Cost lunar"?
+
+[↑ Înapoi la cuprins](#top)
+
+Vin din raportul Nova „consum și costuri" (același din myaccount.nova-energy.ro → Rapoarte):
+
+- **Consum lunar** — consumul ultimei luni care are consum înregistrat (m³ sau kWh); în atribute: media lunară, totalul și fiecare lună din ultimele 12.
+- **Cost lunar** — costul ultimei luni facturate (lei), cu aceeași structură.
+
+Ultima lună cu cost poate fi mai nouă decât ultima lună cu consum: Nova facturează uneori o lună înainte să înregistreze consumul ei. Raportul se actualizează la fiecare a 6-a actualizare (≈ 6 ore). Senzorii apar doar pentru locurile pentru care Nova oferă raportul.
+
+---
+
+## Pot folosi indexul în panoul Energie?
+
+[↑ Înapoi la cuprins](#top)
+
+Da. „Index contor" are unitate (m³ / kWh) și tipul potrivit (gaz / energie), deci apare în **Setări** → **Panouri** → **Energie** → **Consum de gaz** (sau electricitate). Indexul se schimbă când Nova înregistrează o citire nouă, deci consumul apare lunar, nu pe ore.
+
+---
+
+## Cum primesc o notificare înainte de scadența facturii?
+
+[↑ Înapoi la cuprins](#top)
+
+„Factură restantă" are atributele **Următoarea scadență** (dată) și **Zile până la scadență** (număr, negativ după scadență). O automatizare completă e în [README](README.md#exemple). Condiția de bază:
 
 ```yaml
-alias: "GAZ: Transmitere index automat Nova"
-description: >-
-  Trimite autocitirea în ziua 9 a fiecărei luni la ora 12:00.
-triggers:
-  - trigger: time
-    at: "12:00:00"
-conditions:
-  - condition: template
-    value_template: "{{ now().day == 9 }}"
-  - condition: state
-    entity_id: sensor.vreaulanova_1234567_gaz_citire_permisa
-    state: "Da"
-actions:
-  - action: button.press
-    target:
-      entity_id: button.vreaulanova_1234567_gaz_trimite_index
+{{ state_attr('sensor.vreaulanova_1234567_lc00202600_factura_restanta', 'Zile până la scadență') | int(99) <= 3 }}
 ```
 
-> **⚠️ Important:** Înlocuiește `1234567` cu codul tău CRM real. Entity_id-urile exacte le găsești în **Setări** → **Dispozitive și Servicii** → **Nova Power & Gas**.
-
 ---
 
-## Ce e licența și de ce am nevoie de ea?
+## Ce înseamnă „Revizie tehnică"?
 
 [↑ Înapoi la cuprins](#top)
 
-Integrarea folosește un sistem de licențiere server-side (v3.3) cu semnături Ed25519 și HMAC-SHA256. Fără o licență validă, integrarea afișează doar senzorul „Licență necesară" și nu creează senzori sau butoane funcționale.
+Doar pentru gaz. Starea reviziei tehnice periodice a instalației:
 
-Licența se achiziționează de la: [hubinteligent.org/donate?ref=vreaulanova](https://hubinteligent.org/donate?ref=vreaulanova)
+- **Validă** — data următoarei revizii e în viitor;
+- **Expirată** — data a trecut;
+- **Nedefinit** — Nova nu are date despre revizie.
 
-După achiziție, introdu cheia de licență din OptionsFlow:
-1. **Setări** → **Dispozitive și Servicii** → **Nova Power & Gas** → **Configurare**
-2. Completează câmpul „Cheie licență"
-3. Salvează
-
-Licența este validată automat cu serverul. Există un grace period în caz de probleme temporare de conectivitate.
+În atribute: datele ultimei și următoarei revizii și verificări, plus zilele rămase până la fiecare.
 
 ---
 
-## Am introdus licența dar senzorii tot arată „Licență necesară". De ce?
+## Nu am senzorul „Sold prosumator". E normal?
 
 [↑ Înapoi la cuprins](#top)
 
-Câteva cauze posibile:
-
-1. **Licența nu a fost validată** — verifică logurile pentru mesaje cu `license` sau `licenta`
-2. **Serverul de licențe nu este accesibil** — dacă HA nu are acces la internet, validarea eșuează
-3. **Cheie greșită** — verifică că ai copiat cheia corect, fără spații suplimentare
-4. **Restartare necesară** — în rare cazuri, un restart al HA poate rezolva problema
-
-Activează debug logging ([DEBUG.md](DEBUG.md)) și caută mesaje legate de licență pentru a diagnostica problema exactă.
+Da. Senzorul apare doar dacă Nova marchează contul ca prosumator.
 
 ---
 
-## Am schimbat opțiunile integrării. Trebuie să restartez?
+## Am introdus licența, dar tot apare „Licență necesară". De ce?
 
 [↑ Înapoi la cuprins](#top)
 
-Nu. Integrarea se reîncarcă automat când salvezi modificările din OptionsFlow. Nu este necesar un restart manual al Home Assistant.
+1. **Cheia** — verifică să fie copiată exact, fără spații.
+2. **Serverul de licențe** — Home Assistant trebuie să aibă acces la internet; erorile apar în formularul de licență și în jurnal.
+3. **Reîncărcare** — după activare integrarea se reîncarcă singură; dacă nu, repornește Home Assistant.
 
-De asemenea, dacă modifici credențialele (email, parolă) din opțiuni, integrarea validează autentificarea înainte de a salva — dacă noile date sunt greșite, vei primi o eroare și configurația existentă rămâne neschimbată.
+Licența se gestionează din pagina integrării → **Configurare** → **Licență**.
 
 ---
 
-## Trebuie să șterg și readaug integrarea la actualizare?
+## Trebuie să șterg și să readaug integrarea la actualizare?
 
 [↑ Înapoi la cuprins](#top)
 
-De regulă nu. Setările sunt stocate în baza de date HA, nu în fișiere. Actualizarea suprascrie doar codul. Restartează Home Assistant după actualizare și integrarea continuă cu aceleași setări.
+Nu. Setările rămân în Home Assistant, iar actualizarea înlocuiește doar codul. Repornește Home Assistant după actualizare. La trecerea de la 1.x la 2.0.0, integrarea face singură un login nou pe platforma Nova.
 
 ---
 
-## Îmi place proiectul. Cum pot să-l susțin?
+## Cum raportez o problemă?
 
 [↑ Înapoi la cuprins](#top)
 
-- ⭐ Oferă un **star** pe [GitHub](https://github.com/cnecrea/vreaulanova/)
-- 🐛 **Raportează probleme** — deschide un [issue](https://github.com/cnecrea/vreaulanova/issues)
-- 🔀 **Contribuie cu cod** — trimite un pull request
-- ☕ **Donează** prin [Buy Me a Coffee](https://buymeacoffee.com/cnecrea)
-- 📢 **Distribuie** proiectul prietenilor sau comunității tale
+Deschide un [issue](https://github.com/cnecrea/vreaulanova/issues) și atașează **diagnosticul** (pagina integrării → **⋮** → **Descarcă diagnosticul**) — nu conține date personale. Dacă ți se cere jurnalul, urmează [DEBUG.md](DEBUG.md).
+
+---
+
+## Îmi place proiectul. Cum îl pot susține?
+
+[↑ Înapoi la cuprins](#top)
+
+- ⭐ un **star** pe [GitHub](https://github.com/cnecrea/vreaulanova/)
+- 🐛 [issue-uri](https://github.com/cnecrea/vreaulanova/issues) pentru probleme și idei
+- ☕ o cafea pe [Buy Me a Coffee](https://buymeacoffee.com/cnecrea)
