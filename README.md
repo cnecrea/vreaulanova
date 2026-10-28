@@ -7,49 +7,20 @@
 [![Instalări](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/cnecrea/vreaulanova/main/statistici/shields/descarcari.json)](https://github.com/cnecrea/vreaulanova)
 [![Ultima versiune](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/cnecrea/vreaulanova/main/statistici/shields/ultima_release.json)](https://github.com/cnecrea/vreaulanova/releases/latest)
 
+Integrare pentru [Home Assistant](https://www.home-assistant.io/) care aduce din contul tău [Nova Power & Gas](https://nova-energy.ro/) soldul, facturile, plățile, consumul și costurile lunare, convenția de consum, indexul contorului și revizia tehnică a instalației de gaz — și trimite autocitirea direct din Home Assistant.
 
-Integrare custom pentru [Home Assistant](https://www.home-assistant.io/) care monitorizează datele contractuale, consumul și facturile prin API-ul [Nova Power & Gas](https://nova-energy.ro/) (platforma „Vreau la Nova").
-
-Oferă senzori dedicați per cod CRM și per utilitate (gaz / electricitate), sold, facturi, plăți, convenție consum, index contor, revizie tehnică gaz, și butoane de trimitere autocitiri. Suportă complet **multi-account** (cont principal + conturi asociate).
 
 ---
 
-## Ce face integrarea
+## Ce oferă
 
-- **Descoperire automată** a conturilor asociate prin endpoint-ul web `/accounts/login/client`
-- **Multi-account** — un singur config_entry extrage datele pentru TOATE conturile (principal + asociate): switch automat între conturi
-- **Senzori per utilitate** — fiecare cont CRM poate avea gaz, electricitate sau ambele; fiecare utilitate devine un device separat
-- **Sold și facturi** — sold total (RON), facturi restante cu calcul scadență, facturi prosumator (condiționat)
-- **Index contor** — index curent per contor (serie), cu ultima citire și consum în atribute
-- **Convenție consum** — nr luni cu convenție, valori per lună în atribute
-- **Arhive** — facturi și plăți pe anul curent, cu sume per intrare și totaluri
-- **Revizie tehnică gaz** — Validă / Expirată / Nedefinit, cu date revizii și verificări
-- **Trimitere autocitiri** — buton per contor care citește din `input_number` și trimite la API
-- **Sistem de licență** — fără licență validă se afișează doar senzorul „Licență necesară"
-- **Reconfigurare fără reinstalare** — OptionsFlow pentru credențiale și licență
-
----
-
-## Sursa datelor
-
-Datele vin prin API-ul backend Nova Power & Gas (Payload CMS / Next.js) la `https://backend.nova-energy.ro/api`, care expune endpoint-uri REST:
-
-| Endpoint | Descriere |
-|----------|-----------|
-| `/accounts/login/client` | Autentificare (web) — returnează loggedInAccount, viewedAccount, associatedAccounts |
-| `/accounts/switch` | Comutare între conturi asociate |
-| `/accounts/me` | Detalii utilizator curent |
-| `/globals/app-info/general` | Info aplicație (selfReadingsEnabled) |
-| `/metering-points` | Puncte de măsurare (contoare, meters, gasRevisions) |
-| `/metering-points/{id}/consumption-agreements` | Convenție consum per punct de măsurare |
-| `/self-readings` | Autocitiri (istoric) |
-| `/self-readings/add` | Trimitere autocitire (POST) |
-| `/invoices` | Facturi |
-| `/balances` | Sold total + prosumator |
-| `/contracts` | Contracte per utilitate |
-| `/payments` | Plăți |
-
-Autentificarea se face cu email + parolă (POST JSON). Token-ul JWT expiră la 30 de zile. Re-autentificarea este automată.
+- **Sold, facturi, plăți** — sold total, factură restantă cu scadența și zilele rămase, arhivele anului curent.
+- **Consum și cost lunar** — din raportul Nova: ultima lună, mediile lunare și istoricul pe 12 luni.
+- **Index contor** — cu unitate și tip (gaz / energie), deci poate fi adăugat în panoul **Energie**.
+- **Trimitere index** — un buton per loc de consum; rezultatul (reușită sau motivul refuzului) apare ca notificare.
+- **Convenție de consum, revizie tehnică gaz, date contract.**
+- **Mai multe conturi** — contul principal și conturile asociate sunt descoperite automat.
+- **Diagnostic** descărcabil, fără date personale, pentru raportarea problemelor.
 
 ---
 
@@ -57,309 +28,199 @@ Autentificarea se face cu email + parolă (POST JSON). Token-ul JWT expiră la 3
 
 ### HACS (recomandat)
 
-1. Deschide HACS în Home Assistant
-2. Click pe cele 3 puncte (⋮) din colțul dreapta sus → **Custom repositories**
-3. Adaugă URL-ul: `https://github.com/cnecrea/vreaulanova`
-4. Categorie: **Integration**
-5. Click **Add** → găsește „Nova Power & Gas" → **Install**
-6. Restartează Home Assistant
+1. HACS → meniul **⋮** din dreapta sus → **Custom repositories**.
+2. URL: `https://github.com/cnecrea/vreaulanova`, categoria **Integration** → **Add**.
+3. Caută **Nova Power & Gas** → **Download**.
+4. Repornește Home Assistant.
 
 ### Manual
 
-1. Copiază folderul `custom_components/vreaulanova/` în directorul `config/custom_components/` din Home Assistant
-2. Restartează Home Assistant
+Copiază folderul `custom_components/vreaulanova/` în `config/custom_components/` și repornește Home Assistant.
 
 ---
 
 ## Configurare
 
-### Pasul 1 — Adaugă integrarea
-
-1. **Setări** → **Dispozitive și Servicii** → **Adaugă Integrare**
-2. Caută „**Nova Power & Gas**" sau „**Vreau la Nova**"
-3. Completează formularul:
+**Setări** → **Dispozitive și servicii** → **Adaugă integrare** → **Nova Power & Gas**.
 
 | Câmp | Descriere | Implicit |
-|------|-----------|----------|
-| **Email** | Adresa de email a contului Nova | — |
-| **Parolă** | Parola contului Nova | — |
-| **Interval actualizare** | Secunde între interogările API | `3600` (1 oră) |
+|---|---|---|
+| Adresă de email | Emailul contului Nova (cel din myaccount.nova-energy.ro) | — |
+| Parolă | Parola contului Nova | — |
+| Interval de actualizare | Secunde între actualizări (minim 3600) | `3600` |
 
-### Pasul 2 — Licență
+Conturile asociate se descoperă singure — nu selectezi nimic manual.
 
-Integrarea necesită o licență validă. Poți achiziționa una de la [hubinteligent.org/donate?ref=vreaulanova](https://hubinteligent.org/donate?ref=vreaulanova). Licența se introduce din **OptionsFlow** (Setări → Dispozitive și Servicii → Nova Power & Gas → Configurare).
+**Licența** se introduce din **Configurare** → **Licență** (pe pagina integrării). Fără licență validă apare doar senzorul „Licență necesară". Licență: [hubinteligent.org/donate?ref=vreaulanova](https://hubinteligent.org/donate?ref=vreaulanova).
 
-### Pasul 3 — Descoperire automată conturi
-
-După autentificare, integrarea descoperă automat:
-- Contul principal (loggedInAccount)
-- Toate conturile asociate (associatedAccounts)
-
-Fiecare cont CRM generează device-uri separate per utilitate. Nu trebuie să selectezi manual — totul este automat.
-
-Detalii complete în [SETUP.md](SETUP.md).
+Email, parolă și interval se pot schimba oricând din **Configurare** → **Setări cont**, fără reinstalare. Dacă Nova respinge parola salvată, Home Assistant îți cere direct parola nouă.
 
 ---
 
-## Entități create
+## Device-uri și entități
 
-### Structura device-urilor
+Fiecare **loc de consum activ** devine un device: `Nova Power & Gas (1234567) LC-00202600 Gaz`.
 
-Integrarea creează un **device per CRM per utilitate**. Exemple:
-- `Nova Power & Gas (3008726) Gaz`
-- `Nova Power & Gas (3047398) Gaz`
-- `Nova Power & Gas (3047398) Energie Electrică`
+Entity ID-urile au forma `sensor.vreaulanova_{cont}_{loc}_{tip}`, de exemplu `sensor.vreaulanova_1234567_lc00202600_sold_total`.
 
-### Pattern entity_id
+| Entitate | Sufix | Valoare |
+|---|---|---|
+| Sold total | `sold_total` | lei (al contului) |
+| Sold prosumator | `sold_prosumator` | lei — doar la prosumatori |
+| Factură restantă | `factura_restanta` | Da / Nu |
+| Arhivă facturi | `arhiva_facturi` | facturi emise în anul curent |
+| Arhivă plăți | `arhiva_plati` | plăți din anul curent |
+| Date contract | `date_contract` | starea contractului |
+| Convenție consum | `conventie_consum` | luni cu convenție |
+| Consum lunar | `consum_lunar` | m³ / kWh — ultima lună cu consum |
+| Cost lunar | `cost_lunar` | lei — ultima lună facturată |
+| Citire permisă | `citire_permisa` | Da / Nu — perioada de autocitire |
+| Revizie tehnică | `revizie_tehnica` | Validă / Expirată / Nedefinit — doar gaz |
+| Index contor | `index_contor_{serie}` | m³ / kWh |
+| Trimite index | `button.…_trimite_index` | buton |
 
-Toate entitățile urmează pattern-ul: `{platformă}.vreaulanova_{crm}_{utilitate}_{suffix}`
+„Consum lunar" și „Cost lunar" apar doar dacă Nova oferă raportul de consum pentru acel loc.
 
-| `{utilitate}` | Utilitate API |
-|---|---|
-| `gaz` | gas |
-| `electricitate` | electricity |
+**Locurile fără cod CLC/POD** (vechi sau neactivate) nu au contract activ, facturi sau contor la Nova și nu primesc device. Dacă un loc devine activ mai târziu, integrarea se reîncarcă singură și îl adaugă.
 
-### Senzori per utilitate
+### Atribute utile
 
-| Senzor | Entity ID | Valoare principală | Icon |
-|--------|-----------|-------------------|------|
-| Sold total | `sensor.vreaulanova_{crm}_{ut}_sold_total` | Sumă RON | mdi:cash |
-| Sold prosumator | `sensor.vreaulanova_{crm}_{ut}_sold_prosumator` | Sumă RON | mdi:solar-power |
-| Citire permisă | `sensor.vreaulanova_{crm}_{ut}_citire_permisa` | Da / Nu | mdi:pencil-box-outline |
-| Arhivă facturi | `sensor.vreaulanova_{crm}_{ut}_arhiva_facturi` | Nr facturi (anul curent) | mdi:file-document-multiple-outline |
-| Arhivă plăți | `sensor.vreaulanova_{crm}_{ut}_arhiva_plati` | Nr plăți (anul curent) | mdi:cash-check |
-| Date contract | `sensor.vreaulanova_{crm}_{ut}_date_contract` | Status (Activ / Inactiv) | mdi:file-sign |
-| Convenție consum | `sensor.vreaulanova_{crm}_{ut}_conventie_consum` | Nr luni cu convenție | mdi:chart-bar |
-| Factură restantă | `sensor.vreaulanova_{crm}_{ut}_factura_restanta` | Da / Nu | mdi:file-document-alert |
+**Factură restantă** — fiecare factură neachitată, plus două atribute pentru automatizări:
 
-### Senzori per contor (meters)
+```yaml
+Factură FG-1234567: "133,37 lei, scadentă pe 15 noiembrie 2026 (peste 5 zile)"
+Total restantă: "133.37 RON"
+Facturi neachitate: 1
+Următoarea scadență: "15.11.2026"
+Zile până la scadență: 5      # număr; negativ după scadență
+```
 
-| Senzor | Entity ID | Valoare principală | Icon |
-|--------|-----------|-------------------|------|
-| Index contor | `sensor.vreaulanova_{crm}_{ut}_index_contor_{series}` | Valoare index (m³ / kWh) | mdi:counter |
+**Consum lunar** — `Luna`, `Consum mediu lunar`, `Consum total` și câte un atribut pe lună (`Consum septembrie 2026: "98 m³"`). **Cost lunar** are aceeași structură, în lei.
 
-### Senzori specifici gaz
+**Citire permisă** — intervalul de autocitire și anunțurile Nova (de exemplu prelungirea perioadei).
 
-| Senzor | Entity ID | Valoare principală | Icon |
-|--------|-----------|-------------------|------|
-| Revizie tehnică | `sensor.vreaulanova_{crm}_gaz_revizie_tehnica` | Validă / Expirată / Nedefinit | mdi:wrench-clock |
-
-### Senzor licență (fără licență validă)
-
-| Senzor | Entity ID | Valoare principală | Icon |
-|--------|-----------|-------------------|------|
-| Licență necesară | `sensor.vreaulanova_{crm}_licenta` | „Licență necesară" | mdi:license |
-
-### Butoane
-
-| Buton | Entity ID | Icon | Condiție |
-|-------|-----------|------|----------|
-| Trimite index | `button.vreaulanova_{crm}_{ut}_trimite_index` | mdi:fire (gaz) / mdi:flash (electricitate) | Licență validă |
+**Index contor** — ultima citire, consumul, data, tipul citirii și `Helper index` (vezi mai jos).
 
 ---
 
-## Atribute detaliate per senzor
+## Trimiterea indexului
 
-### Sold total
+Butonul **Trimite index** citește indexul dintr-un helper `input_number`. ID-ul exact îl găsești în atributul **Helper index** al butonului (sau al senzorului de index), de exemplu:
 
-Valoare principală: suma în RON (device_class: monetary, state_class: total).
-
-### Citire permisă
-
-Valoare principală: Da / Nu — pe baza `app_info.selfReadingsEnabled` de la API.
-
-### Arhivă facturi
-
-Atribute:
-```yaml
-Emisă pe 4 martie 2026: "125,50 lei"
-Emisă pe 15 februarie 2026: "98,20 lei"
-Total facturi: "2"
-Total facturat: "223,70 lei"
+```
+input_number.vreaulanova_dgsvlrvl12345678_abc_12345678_2021_index
 ```
 
-### Arhivă plăți
+Creează-l din **Setări** → **Dispozitive și servicii** → **Ajutoare** → **Creează ajutor** → **Număr**, apoi deschide-i setările și pune exact acest **ID entitate**. Sau în `configuration.yaml`:
 
-Atribute:
 ```yaml
-Plătită pe 10 martie 2026: "125,50 lei"
-Total plăți: "1"
-Total plătit: "125,50 lei"
+input_number:
+  vreaulanova_dgsvlrvl12345678_abc_12345678_2021_index:
+    name: Index gaz de trimis
+    min: 0
+    max: 999999
+    step: 1
+    mode: box
 ```
 
-### Date contract
+Scrie indexul în helper și apasă butonul. Rezultatul apare în **notificările din bara laterală**: indexul trimis, sau motivul refuzului (perioadă închisă, helper lipsă, mesajul Nova). Butonul verifică perioada de autocitire direct la Nova în momentul apăsării.
 
-Atribute:
+Automatizare — trimite indexul unui contor inteligent când se deschide perioada:
+
 ```yaml
-Contract: "NV-12345"
-Tip client: "Casnic"
-Semnat la: "2024-01-15"
-Intrat în vigoare: "2024-02-01"
-Tip: "Doar electronic"
-```
-
-### Convenție consum
-
-Atribute:
-```yaml
-Convenție din luna ianuarie: "150 m³"
-Convenție din luna februarie: "120 m³"
-# ... per fiecare lună cu valoare nenulă
-```
-
-### Factură restantă
-
-Atribute:
-```yaml
-Total restantă: "223.70 RON"
-Scadență ultima factură: "2026-04-15"
-Facturi neachitate: 2
-```
-
-### Index contor
-
-Atribute:
-```yaml
-Ultima citire: 6030
-Consum: 150
-Data ultima citire: "2026-03-01"
-Index vechi: 5880
-```
-
-### Revizie tehnică gaz
-
-Atribute:
-```yaml
-Data ultimei revizii: "2024-06-15"
-Data următoarei revizii: "2026-06-15"
-Data ultimei verificări: "2023-09-10"
-Data următoarei verificări: "2025-09-10"
+alias: "Nova: trimite indexul gazului"
+triggers:
+  - trigger: state
+    entity_id: sensor.vreaulanova_1234567_lc00202600_citire_permisa
+    to: "Da"
+actions:
+  - action: input_number.set_value
+    target:
+      entity_id: input_number.vreaulanova_dgsvlrvl12345678_abc_12345678_2021_index
+    data:
+      value: "{{ states('sensor.contor_gaz') | int }}"
+  - action: button.press
+    target:
+      entity_id: button.vreaulanova_1234567_lc00202600_trimite_index
 ```
 
 ---
 
-## Exemple de automatizări
+## Exemple
 
-### Notificare factură restantă
+**Notificare cu 3 zile înainte de scadență:**
 
 ```yaml
-automation:
-  - alias: "Notificare factură restantă Nova"
-    trigger:
-      - platform: state
-        entity_id: sensor.vreaulanova_3043777_gaz_factura_restanta
-        to: "Da"
-    action:
-      - service: notify.mobile_app_telefonul_meu
-        data:
-          title: "Factură restantă Nova"
-          message: >
-            Ai {{ state_attr('sensor.vreaulanova_3043777_gaz_factura_restanta', 'Total restantă') }}
-            de plătit.
+alias: "Nova: factură aproape de scadență"
+triggers:
+  - trigger: time
+    at: "09:00:00"
+conditions:
+  - condition: template
+    value_template: >
+      {{ state_attr('sensor.vreaulanova_1234567_lc00202600_factura_restanta', 'Zile până la scadență')
+         | int(99) <= 3 }}
+actions:
+  - action: notify.mobile_app_telefonul_meu
+    data:
+      title: "Factură Nova"
+      message: >
+        Scadență pe {{ state_attr('sensor.vreaulanova_1234567_lc00202600_factura_restanta', 'Următoarea scadență') }}:
+        {{ state_attr('sensor.vreaulanova_1234567_lc00202600_factura_restanta', 'Total restantă') }}
 ```
 
-### Card pentru Dashboard
+**Panoul Energie:** **Setări** → **Panouri** → **Energie** → **Consum de gaz** → adaugă senzorul *Index contor*. Indexul se actualizează când Nova înregistrează o citire nouă (de regulă lunar).
+
+**Card:**
 
 ```yaml
 type: entities
 title: Nova Power & Gas
 entities:
-  - entity: sensor.vreaulanova_3043777_gaz_date_contract
-    name: Contract
-  - entity: sensor.vreaulanova_3043777_gaz_sold_total
-    name: Sold total
-  - entity: sensor.vreaulanova_3043777_gaz_citire_permisa
-    name: Citire permisă
-  - entity: sensor.vreaulanova_3043777_gaz_factura_restanta
-    name: Factură restantă
-  - entity: sensor.vreaulanova_3043777_gaz_revizie_tehnica
-    name: Revizie tehnică
-```
-
-### Card condiționat — Alertă factură restantă
-
-```yaml
-type: conditional
-conditions:
-  - condition: state
-    entity: sensor.vreaulanova_3043777_gaz_factura_restanta
-    state: "Da"
-card:
-  type: markdown
-  content: >-
-    ## ⚠️ Ai factură restantă Nova!
-
-    **Total restantă:** {{ state_attr('sensor.vreaulanova_3043777_gaz_factura_restanta', 'Total restantă') }}
-
-    Verifică detaliile în secțiunea Facturi.
+  - sensor.vreaulanova_1234567_lc00202600_sold_total
+  - sensor.vreaulanova_1234567_lc00202600_factura_restanta
+  - sensor.vreaulanova_1234567_lc00202600_consum_lunar
+  - sensor.vreaulanova_1234567_lc00202600_cost_lunar
+  - sensor.vreaulanova_1234567_lc00202600_citire_permisa
+  - button.vreaulanova_1234567_lc00202600_trimite_index
 ```
 
 ---
 
-## Structura fișierelor
+## Cum se actualizează datele
 
-```
-custom_components/vreaulanova/
-├── __init__.py          # Setup/unload integrare (runtime_data, licență, heartbeat)
-├── api.py               # Manager API — login /accounts/login/client, switch, GET/POST
-├── button.py            # Butoane trimitere autocitiri per contor (gaz / electricitate)
-├── config_flow.py       # ConfigFlow + OptionsFlow (autentificare, licență)
-├── const.py             # Constante, URL-uri API
-├── coordinator.py       # DataUpdateCoordinator — multi-account (switch → fetch → switch înapoi)
-├── diagnostics.py       # Diagnostics pentru troubleshooting
-├── helpers.py           # Funcții utilitare
-├── license.py           # Manager licență (server-side v3.3, Ed25519, HMAC-SHA256)
-├── manifest.json        # Metadata integrare
-├── sensor.py            # Clase senzor per utilitate + per contor
-├── strings.json         # Traduceri implicite (engleză)
-└── translations/
-    └── ro.json          # Traduceri române
-```
+- La fiecare interval (implicit o oră): sold, facturi, locuri de consum, autocitiri, contracte, convenții, perioada de autocitire.
+- La fiecare a 6-a actualizare (≈ 6 ore): în plus plățile, reviziile de gaz și raportul de consum-costuri.
+- Dacă Nova nu răspunde la o parte din date, se păstrează valorile anterioare; dacă nu răspunde deloc, entitățile devin indisponibile până la următoarea încercare.
+
+Datele vin de la `https://myaccount-admin.nova-energy.ro/api/v1` — același API pe care îl folosesc myaccount.nova-energy.ro și aplicația mobilă.
+
+---
+
+## Probleme?
+
+- [FAQ.md](FAQ.md) — întrebări frecvente.
+- [DEBUG.md](DEBUG.md) — jurnalul de depanare și diagnosticul.
+- [Issues](https://github.com/cnecrea/vreaulanova/issues) — atașează diagnosticul (pagina integrării → **⋮** → **Descarcă diagnosticul**); nu conține date personale.
 
 ---
 
 ## Cerințe
 
-- **Home Assistant** 2025.11 sau mai nou (pattern `entry.runtime_data`)
-- **HACS** (opțional, pentru instalare ușoară)
-- **Cont Nova Power & Gas** activ cu email + parolă
-- **Licență** validă — [hubinteligent.org/donate?ref=vreaulanova](https://hubinteligent.org/donate?ref=vreaulanova)
-- **Python**: `cryptography >= 41.0.0` (dependință automată prin manifest)
-
----
-
-## Limitări cunoscute
-
-1. **O singură instanță per cont** — dacă încerci să adaugi același email de două ori, vei primi eroare.
-
-2. **Citire permisă** — depinde de `app_info.selfReadingsEnabled` global de la Nova, nu per metering point.
-
-3. **Trimitere autocitiri** — butonul citește din `input_number.vreaulanova_{clc_pod}_{series}_index`. Entitatea trebuie creată manual în `configuration.yaml`.
-
-4. **Sold prosumator** — senzorul apare doar dacă există contracte prosumator.
-
-5. **Heavy refresh** — plățile se reîmprospătează doar la fiecare al 6-lea ciclu de actualizare (≈6h la interval implicit de 1h).
+- Home Assistant 2025.11 sau mai nou
+- Cont Nova Power & Gas (email + parolă)
+- Licență validă — [hubinteligent.org/donate?ref=vreaulanova](https://hubinteligent.org/donate?ref=vreaulanova)
 
 ---
 
 ## ☕ Susține dezvoltatorul
 
-Dacă ți-a plăcut această integrare și vrei să sprijini munca depusă, **invită-mă la o cafea**! 🫶
+Dacă integrarea îți e utilă, **invită-mă la o cafea**! 🫶
 
 [![Buy Me A Coffee](https://img.shields.io/badge/Buy%20Me%20A%20Coffee-Susține%20dezvoltatorul-orange?style=for-the-badge&logo=buy-me-a-coffee)](https://buymeacoffee.com/cnecrea)
 
----
-
-## 🧑‍💻 Contribuții
-
-Contribuțiile sunt binevenite! Simte-te liber să trimiți un pull request sau să raportezi probleme [aici](https://github.com/cnecrea/vreaulanova/issues).
-
----
-
-## 🌟 Suport
-Dacă îți place această integrare, oferă-i un ⭐ pe [GitHub](https://github.com/cnecrea/vreaulanova/)! 😊
-
+Contribuțiile sunt binevenite — pull request-uri sau [issue-uri](https://github.com/cnecrea/vreaulanova/issues). Un ⭐ pe [GitHub](https://github.com/cnecrea/vreaulanova/) ajută mult.
 
 ## Licență
 
-[MIT](LICENSE)
+[MIT](LICENSE.md)
