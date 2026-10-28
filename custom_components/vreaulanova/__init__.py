@@ -21,6 +21,7 @@ from homeassistant.helpers.event import async_call_later
 from .const import DOMAIN, DEFAULT_UPDATE_INTERVAL, DOMAIN_TOKEN_STORE, LICENSE_DATA_KEY, LICENSE_PURCHASE_URL, PLATFORMS
 from .api import NovaApiClient
 from .coordinator import NovaCoordinator
+from .helpers import mask_email, remove_inactive_devices
 from .license import LicenseManager
 
 _LOGGER = logging.getLogger(__name__)
@@ -279,19 +280,19 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry):
     if stored_token:
         api_client.inject_token(stored_token)
         _LOGGER.debug(
-            "Token injectat din config_flow (proaspăt) pentru %s.",
-            username,
+            "[VreauLaNova] Token injectat din config_flow (proaspăt) pentru %s.",
+            mask_email(username),
         )
     elif entry.data.get("token_data"):
         api_client.inject_token(entry.data["token_data"])
         _LOGGER.debug(
-            "Token injectat din config_entry.data (persistent) pentru %s.",
-            username,
+            "[VreauLaNova] Token injectat din config_entry.data (persistent) pentru %s.",
+            mask_email(username),
         )
     else:
         _LOGGER.debug(
-            "Niciun token salvat disponibil pentru %s. Se va face login.",
-            username,
+            "[VreauLaNova] Niciun token salvat pentru %s — se face login.",
+            mask_email(username),
         )
     # Curățăm store-ul dacă e gol
     if DOMAIN_TOKEN_STORE in hass.data and not hass.data[DOMAIN_TOKEN_STORE]:
@@ -309,6 +310,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry):
     # return False = integrare picată până la reload manual).
     # Parolă respinsă → ConfigEntryAuthFailed (HA cere reautentificarea).
     await coordinator.async_config_entry_first_refresh()
+
+    # Locurile fără CLC/POD nu mai primesc senzori: scoatem device-urile lor rămase din versiunile anterioare
+    remove_inactive_devices(hass, entry, (coordinator.data or {}).get("accounts_data", {}))
 
     # Salvăm datele runtime
     entry.runtime_data = NovaRuntimeData(

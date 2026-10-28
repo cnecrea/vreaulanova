@@ -22,7 +22,8 @@
     },
     "error": {
       "auth_failed": "Authentication failed. Please check your email and password.",
-      "no_data": "Authentication was successful, but no data was found for this account."
+      "no_data": "Authentication was successful, but no data was found for this account.",
+      "cannot_connect": "Cannot connect to Nova Power & Gas. Check your internet connection or try again later."
     },
     "abort": {
       "already_configured": "This Nova Power & Gas account is already configured.",
@@ -67,7 +68,8 @@
       "license_fingerprint_mismatch": "This license key is bound to a different installation.",
       "license_network_error": "Cannot connect to the license server. Check your internet connection.",
       "license_server_error": "License server error. Please try again later.",
-      "already_configured": "This account is already configured in another entry."
+      "already_configured": "This account is already configured in another entry.",
+      "cannot_connect": "Cannot connect to Nova Power & Gas. Check your internet connection or try again later."
     }
   },
   "issues": {

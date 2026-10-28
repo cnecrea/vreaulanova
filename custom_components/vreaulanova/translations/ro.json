@@ -22,7 +22,8 @@
     },
     "error": {
       "auth_failed": "Autentificare eșuată. Verificați adresa de email și parola.",
-      "no_data": "Autentificare reușită, dar nu au fost găsite date asociate acestui cont."
+      "no_data": "Autentificare reușită, dar nu au fost găsite date asociate acestui cont.",
+      "cannot_connect": "Nu se poate conecta la Nova Power & Gas. Verificați conexiunea la internet sau încercați mai târziu."
     },
     "abort": {
       "already_configured": "Acest cont Nova Power & Gas este deja configurat.",
@@ -67,7 +68,8 @@
       "license_fingerprint_mismatch": "Această cheie de licență este asociată altei instalări.",
       "license_network_error": "Nu se poate conecta la serverul de licențe. Verifică conexiunea la internet.",
       "license_server_error": "Eroare server licențe. Încearcă din nou mai târziu.",
-      "already_configured": "Acest cont este deja configurat într-o altă intrare."
+      "already_configured": "Acest cont este deja configurat într-o altă intrare.",
+      "cannot_connect": "Nu se poate conecta la Nova Power & Gas. Verificați conexiunea la internet sau încercați mai târziu."
     }
   },
   "issues": {

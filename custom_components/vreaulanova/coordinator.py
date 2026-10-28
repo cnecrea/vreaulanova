@@ -32,6 +32,7 @@ from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, Upda
 
 from .api import NovaApiClient, NovaApiError, NovaAuthError
 from .const import DEFAULT_UPDATE_INTERVAL, DOMAIN, HEAVY_UPDATE_MULTIPLIER, LICENSE_DATA_KEY, MONTHS_EN
+from .helpers import is_active_mp, to_float
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -99,7 +100,7 @@ class NovaCoordinator(DataUpdateCoordinator):
             if isinstance(result, Exception):
                 if not isinstance(result, NovaApiError):
                     raise result
-                _LOGGER.warning("Eroare la %s (cont %s): %s", label, crm, result)
+                _LOGGER.warning("[VreauLaNova] %s nu a putut fi citit (cont %s): %s", label, crm, result)
         if failed == set(labels):
             # Nova nu răspunde: entitățile devin indisponibile și își păstrează
             # ultimele valori (înainte: datele erau înlocuite cu liste goale →
@@ -136,7 +137,7 @@ class NovaCoordinator(DataUpdateCoordinator):
                         if not existing_mp.get("meters") and sr_mp.get("meters"):
                             existing_mp["meters"] = sr_mp["meters"]
                             _LOGGER.debug(
-                                "Merge meters din /self-readings pentru MP %s",
+                                "[VreauLaNova] Contoarele locului %s preluate din for-self-readings",
                                 existing_mp.get("number", sr_id),
                             )
                         break
@@ -149,16 +150,29 @@ class NovaCoordinator(DataUpdateCoordinator):
                     metering_points.append(sr_mp)
                     seen_mp_ids.add(sr_id)
                     _LOGGER.debug(
-                        "MP extra din /self-readings: %s (%s) spec=%s",
+                        "[VreauLaNova] Loc în plus din for-self-readings: %s (%s), CLC/POD %s",
                         sr_mp.get("number", sr_id),
                         sr_mp.get("utilityType", "?"),
                         spec,
                     )
                 else:
                     _LOGGER.debug(
-                        "MP ignorat din /self-readings (fără CLC/POD): %s",
+                        "[VreauLaNova] Loc ignorat din for-self-readings (fără CLC/POD): %s",
                         sr_mp.get("number", sr_id),
                     )
+
+        # ── Locuri fără CLC/POD (vechi / neactivate): fără contract, facturi, contor sau autocitiri.
+        # Nu primesc senzori și nu se mai cer date pentru ele; rămân doar în listă (diagnostic, jurnal).
+        inactive = [
+            {"number": mp.get("number", ""), "utilityType": mp.get("utilityType", ""), "meteringPointId": mp.get("meteringPointId", "")}
+            for mp in metering_points if not is_active_mp(mp)
+        ]
+        metering_points = [mp for mp in metering_points if is_active_mp(mp)]
+        if inactive:
+            _LOGGER.debug(
+                "[VreauLaNova] Cont %s: %d loc(uri) fără CLC/POD ignorate (fără senzori): %s",
+                crm, len(inactive), ", ".join(m["number"] or "?" for m in inactive),
+            )
 
         # ── Consumption agreements per metering point ──
         agreements = {}
@@ -178,7 +192,7 @@ class NovaCoordinator(DataUpdateCoordinator):
                 for mp_id, result in zip(mp_ids, results):
                     if isinstance(result, Exception):
                         _LOGGER.warning(
-                            "Eroare agreement %s (cont %s): %s", mp_id, crm, result
+                            "[VreauLaNova] Convenția de consum a locului %s nu a putut fi citită (cont %s): %s", mp_id, crm, result
                         )
                         old = prev_acct.get("agreements", {}).get(mp_id)
                         if old:
@@ -186,13 +200,27 @@ class NovaCoordinator(DataUpdateCoordinator):
                     elif result:
                         agreements[mp_id] = result
 
-        # ── Payments (doar la heavy refresh) ──
+        # ── Plăți, revizii gaz, raport consum-costuri (doar la heavy refresh; altfel cele anterioare) ──
         payments = prev_acct.get("payments", [])
+        gas_revisions = prev_acct.get("gas_revisions", {})
+        reports = prev_acct.get("consumption_reports", {})
         if is_heavy:
             try:
                 payments = await self.api.async_get_payments()
             except NovaApiError as err:
-                _LOGGER.warning("Eroare la payments (cont %s): %s", crm, err)
+                _LOGGER.warning("[VreauLaNova] Plățile nu au putut fi citite (cont %s): %s", crm, err)
+            if any(mp.get("utilityType") == "gas" for mp in metering_points):
+                try:
+                    gas_revisions = await self.api.async_get_gas_revisions()
+                except NovaApiError as err:
+                    _LOGGER.warning("[VreauLaNova] Reviziile de gaz nu au putut fi citite (cont %s): %s", crm, err)
+            reports = await self._fetch_reports(crm, reports)
+
+        # Reviziile vin separat, pe CLC (specificIdForUtilityType); senzorul le citește din MP
+        for mp in metering_points:
+            spec = mp.get("specificIdForUtilityType")
+            if spec and spec in gas_revisions:
+                mp["gasRevisions"] = gas_revisions[spec]
 
         # ── Procesare invoices ──
         invoices = []
@@ -201,21 +229,46 @@ class NovaCoordinator(DataUpdateCoordinator):
             invoices = prev_acct.get("invoices", [])
             balance = prev_acct.get("balance", balance)
         elif invoices_raw and isinstance(invoices_raw, dict):
-            invoices = invoices_raw.get("invoices", [])
-            balance = invoices_raw.get("balance", balance)
+            invoices = invoices_raw.get("invoices", []) or []
+            balance = invoices_raw.get("balance", balance) or balance
 
-        # Suprascriem balance cu endpoint-ul dedicat (mai fiabil)
+        # Suprascriem balance cu endpoint-ul dedicat (/dashboard/balance): total, electricity, gas,
+        # prosumer, prosumerDue, processingPayments, pendingInvoicesCount, perMeteringPoint, isProsumer
         if balances_raw and isinstance(balances_raw, dict):
-            balance = {
-                "total": balances_raw.get("balance", 0),
-                "prosumer": balances_raw.get("prosumerBalance", 0),
-            }
+            balance = {**balances_raw, "isProsumer": bool(balances_raw.get("isProsumer"))}
+        elif "balances" in failed:
+            balance = prev_acct.get("balance", balance)
 
-        # ── Indexare self_readings per contor ──
+        # ── Indexare self_readings per contor (cel mai nou primul, ca în API) ──
         readings_by_meter = {}
         for sr in self_readings:
             series = sr.get("meterSeries", "")
             readings_by_meter.setdefault(series, []).append(sr)
+
+        # ── Contoare din istoric, când API-ul nu le dă ──
+        # /metering-points nu are „meters", iar for-self-readings le dă doar în perioada de
+        # citire. Fără ele, senzorii de index ar dispărea la fiecare repornire din afara
+        # perioadei. Le reconstruim din ultima autocitire a fiecărei serii a locului.
+        for mp in metering_points:
+            if not isinstance(mp.get("meters"), list):
+                mp["meters"] = []  # null / lipsă → listă goală (senzorii și butonul iterează pe ea)
+            if mp["meters"]:
+                continue
+            derived = {}
+            for sr in self_readings:  # cel mai nou primul → prima apariție a seriei e cea curentă
+                series = sr.get("meterSeries")
+                if not series or series in derived or sr.get("meteringPointNo") != mp.get("number"):
+                    continue
+                derived[series] = {
+                    "series": series,
+                    "meterCode": sr.get("meterCode", ""),
+                    "dialCode": sr.get("dialCode", ""),
+                    "unit": sr.get("unit", ""),
+                    "currentIndex": sr.get("newIndex", sr.get("consumptionNewIndex")),
+                    "fromHistory": True,
+                }
+            if derived:
+                mp["meters"] = list(derived.values())
 
         # ── Indexare facturi per metering point ──
         invoices_by_mp = {}
@@ -223,10 +276,24 @@ class NovaCoordinator(DataUpdateCoordinator):
             mp_code = inv.get("meteringPointCode", "")
             invoices_by_mp.setdefault(mp_code, []).append(inv)
 
+        for mp in metering_points:
+            meters = mp.get("meters") or []
+            _LOGGER.debug(
+                "[VreauLaNova] Cont %s · %s (%s): %s · contoare %d%s · facturi %d · autocitiri %d · "
+                "convenție %s · revizii %d · raport consum %s",
+                crm, mp.get("number", "?"), mp.get("utilityType", "?"),
+                "activ (CLC/POD)" if mp.get("specificIdForUtilityType") else "FĂRĂ CLC/POD (inactiv)",
+                len(meters), " (din istoric)" if any(m.get("fromHistory") for m in meters) else "",
+                len(invoices_by_mp.get(mp.get("specificIdForUtilityType") or "", [])),
+                sum(1 for sr in self_readings if sr.get("meteringPointNo") == mp.get("number")),
+                "da" if mp.get("meteringPointId") in agreements else "nu",
+                len(mp.get("gasRevisions") or []),
+                "da" if mp.get("number") in reports else "nu",
+            )
         _LOGGER.debug(
-            "Fetch cont %s (%s): %d puncte, %d facturi, %d autocitiri, %d contracte",
-            crm, account_name, len(metering_points), len(invoices),
-            len(self_readings), len(contracts),
+            "[VreauLaNova] Cont %s: %d locuri, %d facturi, %d plăți, %d autocitiri, %d contracte, sold %s lei%s",
+            crm, len(metering_points), len(invoices), len(payments), len(self_readings), len(contracts),
+            balance.get("total", 0), f" — endpoint-uri eșuate: {', '.join(sorted(failed))}" if failed else "",
         )
 
         return {
@@ -241,7 +308,38 @@ class NovaCoordinator(DataUpdateCoordinator):
             "self_readings": self_readings,
             "readings_by_meter": readings_by_meter,
             "invoices_by_mp": invoices_by_mp,
+            "inactive_metering_points": inactive,
+            "gas_revisions": gas_revisions,
+            "consumption_reports": reports,
         }
+
+    async def _fetch_reports(self, crm: str, previous: dict) -> dict:
+        """Raportul consum-costuri pentru fiecare loc cu furnizare: {număr LC: {utilitate: raport}}.
+
+        Lista de locuri vine de la Nova (doar cele active). Un raport care nu răspunde acum
+        își păstrează valoarea anterioară.
+        """
+        try:
+            locations = await self.api.async_get_report_locations()
+        except NovaApiError as err:
+            _LOGGER.warning("[VreauLaNova] Locurile pentru raportul de consum nu au putut fi citite (cont %s): %s", crm, err)
+            return previous
+        reports: dict[str, dict] = {}
+        for loc in locations:
+            place = str(loc.get("id") or loc.get("code") or "").strip()
+            for utility in loc.get("utilities") or []:
+                if not place or utility not in ("gas", "electricity"):
+                    continue
+                try:
+                    report = await self.api.async_get_consumption_report(place, utility)
+                except NovaApiError as err:
+                    _LOGGER.warning(
+                        "[VreauLaNova] Raportul de consum %s/%s nu a putut fi citit (cont %s): %s", place, utility, crm, err
+                    )
+                    report = (previous.get(place) or {}).get(utility)
+                if report:
+                    reports.setdefault(place, {})[utility] = report
+        return reports
 
     # ──────────────────────────────────────────
     # Update principal — multi-account
@@ -257,8 +355,8 @@ class NovaCoordinator(DataUpdateCoordinator):
 
         is_heavy = self._is_heavy
         _LOGGER.debug(
-            "Actualizare Nova (refresh=#%s, tip=%s)",
-            self._refresh_count, "HEAVY" if is_heavy else "light",
+            "[VreauLaNova] Actualizare #%s (%s)",
+            self._refresh_count, "completă: + plăți, revizii, raport consum" if is_heavy else "rapidă",
         )
 
         try:
@@ -281,7 +379,7 @@ class NovaCoordinator(DataUpdateCoordinator):
         except NovaApiError as err:
             raise UpdateFailed(f"Eroare la actualizare Nova: {err}") from err
         except Exception as err:
-            _LOGGER.exception("Eroare la actualizare Nova: %s", err)
+            _LOGGER.exception("[VreauLaNova] Eroare neașteptată la actualizare: %s", err)
             raise UpdateFailed(f"Eroare la actualizare Nova: {err}") from err
 
     async def _async_switch_to_primary(self) -> bool:
@@ -294,7 +392,7 @@ class NovaCoordinator(DataUpdateCoordinator):
                 "accountId": logged_in.get("accountId", ""),
             })
         except NovaApiError as err:
-            _LOGGER.error("Eroare la revenirea pe contul principal: %s", err)
+            _LOGGER.error("[VreauLaNova] Revenirea pe contul principal a eșuat: %s", err)
             return False
         return bool(result)
 
@@ -313,7 +411,7 @@ class NovaCoordinator(DataUpdateCoordinator):
         try:
             app_info = await self.api.async_get_app_info()
         except Exception as err:
-            _LOGGER.warning("Eroare la app_info: %s", err)
+            _LOGGER.warning("[VreauLaNova] /system/info (perioada de autocitire) nu a putut fi citit: %s", err)
 
         current_month_key = MONTHS_EN[datetime.now().month - 1]
 
@@ -350,7 +448,7 @@ class NovaCoordinator(DataUpdateCoordinator):
                     continue  # Deja extras sau CRM invalid
 
                 _LOGGER.debug(
-                    "Switch la contul asociat: %s (%s)",
+                    "[VreauLaNova] Comutare pe contul asociat %s (%s)",
                     aa.get("accountName", "?"), aa_crm,
                 )
 
@@ -367,7 +465,7 @@ class NovaCoordinator(DataUpdateCoordinator):
                     # Un cont asociat indisponibil nu oprește actualizarea
                     # celorlalte: își păstrează datele anterioare.
                     _LOGGER.warning(
-                        "Contul asociat %s (%s) nu a putut fi actualizat: %s",
+                        "[VreauLaNova] Contul asociat %s (%s) nu a putut fi actualizat: %s",
                         aa.get("accountName", "?"), aa_crm, err,
                     )
                     if aa_crm in prev_accounts:
@@ -375,9 +473,29 @@ class NovaCoordinator(DataUpdateCoordinator):
         finally:
             # ── Revenire la contul principal (ALWAYS — inclusiv pe excepție) ──
             if switched and logged_crm:
-                _LOGGER.debug("Revenire la contul principal: %s", logged_crm)
+                _LOGGER.debug("[VreauLaNova] Revenire pe contul principal %s", logged_crm)
                 if not await self._async_switch_to_primary():
                     self._session_on_other_account = True
+
+        # Loc nou activ (ex: a primit CLC/POD după activarea contractului) sau contor nou (ex: primul
+        # contor al unui loc fără autocitiri, apărut în perioada de citire) → reîncărcare, ca să i se
+        # creeze senzorii și butonul (entitățile se creează doar la configurare). Doar la apariții noi:
+        # contoarele care dispar în afara perioadei nu declanșează nimic.
+        if self.data and self.config_entry:
+            def _known(data: dict) -> set[tuple[str, str, str]]:
+                return {
+                    (crm, mp.get("number", ""), meter.get("series", ""))
+                    for crm, acct in (data.get("accounts_data") or {}).items()
+                    for mp in acct.get("metering_points", [])
+                    for meter in (mp.get("meters") or [{}])
+                }
+            new = _known({"accounts_data": accounts_data}) - _known(self.data)
+            if new:
+                _LOGGER.info(
+                    "[VreauLaNova] Locuri sau contoare noi: %s — integrarea se reîncarcă pentru a le crea entitățile",
+                    ", ".join(f"{n}{f' (contor {s})' if s else ''}" for _, n, s in sorted(new)),
+                )
+                self.hass.config_entries.async_schedule_reload(self.config_entry.entry_id)
 
         # Incrementăm counter
         self._refresh_count += 1
@@ -389,12 +507,15 @@ class NovaCoordinator(DataUpdateCoordinator):
             len(a.get("metering_points", [])) for a in accounts_data.values()
         )
         total_balance = sum(
-            a.get("balance", {}).get("total", 0) for a in accounts_data.values()
+            to_float((a.get("balance") or {}).get("total")) or 0.0 for a in accounts_data.values()
         )
+        app = app_info or {}
         _LOGGER.debug(
-            "Actualizare finalizată: %d conturi, %d puncte măsurare total, "
-            "balance total=%.2f Lei",
-            len(accounts_data), total_mp, total_balance,
+            "[VreauLaNova] Actualizare #%d terminată: %d conturi, %d locuri de consum, sold total %.2f lei, "
+            "autocitire %s%s",
+            self._refresh_count - 1, len(accounts_data), total_mp, total_balance,
+            "DESCHISĂ" if app.get("selfReadingsEnabled") else "închisă",
+            f" ({app['selfReadingIntervalMessage']})" if app.get("selfReadingIntervalMessage") else "",
         )
 
         return {

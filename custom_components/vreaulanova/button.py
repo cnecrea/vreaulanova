@@ -1,98 +1,51 @@
 """Platforma Button pentru Nova Power & Gas (Vreau la Nova).
 
-Arhitectura v1.1 — PER LOC DE CONSUM (metering point):
-
-  Buton per contor (meter) per loc de consum pentru trimiterea autocitirilor.
-  Nova API: POST /self-readings/add cu payload specific per contor.
+Un buton „Trimite index" per loc de consum activ (cu cod CLC/POD). Locurile fără CLC/POD
+(vechi / neactivate) sunt scoase de coordinator: fără contor la Nova, fără buton și fără senzori.
 
 Pattern entity_id: button.{DOMAIN}_{crm}_{mp_slug}_trimite_index
-  mp_slug = numărul locului de consum (LC-00202600 → lc00202600)
+Device: același cu al senzorilor locului (helpers.mp_device).
 
-Device: un device per CRM per metering point (identic cu sensor.py).
-  identifier: (DOMAIN, f"mp_{crm}_{mp_slug}")
+Trimiterea: POST /self-readings cu utilityType, meteringPointNumber, specificIdForUtilityType,
+meterSeries, meterCode, newIndex, currentIndex, unit, accountName [, dialCode] — ca aplicația.
+Indexul se citește din helperul input_number afișat în atributele butonului.
+
+Rezultatul fiecărei apăsări (reușită sau motivul refuzului) apare ca notificare persistentă
+în bara laterală — una per loc de consum, înlocuită la apăsarea următoare.
 """
 
 import logging
-import re
 from typing import Any
 
+from homeassistant.components import persistent_notification
 from homeassistant.components.button import ButtonEntity
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
-from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers import entity_registry as er
-from homeassistant.helpers.device_registry import DeviceEntryType, DeviceInfo
+from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
-from homeassistant.util import slugify
+from homeassistant.util import dt as dt_util
 
 from .api import NovaApiError
 from .const import ATTRIBUTION, DOMAIN, LICENSE_DATA_KEY
 from .coordinator import NovaCoordinator
+from .helpers import (
+    format_number,
+    helper_index_entity_id,
+    is_active_mp,
+    mp_device,
+    mp_slug,
+    normalize_unit,
+    notification_id,
+    utility_label,
+)
 
 _LOGGER = logging.getLogger(__name__)
 
 
-# ═══════════════════════════════════════════════
-# HELPERS
-# ═══════════════════════════════════════════════
-
-def _utility_short(mp: dict) -> str:
-    """Returnează eticheta scurtă pt utilitate (entity_id suffix)."""
-    ut = mp.get("utilityType", "")
-    if ut == "gas":
-        return "gaz"
-    if ut == "electricity":
-        return "electricitate"
-    return ut
-
-
-def _utility_label(mp: dict) -> str:
-    """Returnează eticheta afișabilă pt utilitate."""
-    ut = mp.get("utilityType", "")
-    if ut == "gas":
-        return "Gaz"
-    if ut == "electricity":
-        return "Energie Electrică"
-    return ut
-
-
-def _mp_slug(mp: dict) -> str:
-    """Generează un slug unic din numărul locului de consum.
-
-    LC-00202600 → lc00202600  (folosit în entity_id și device identifier)
-    Orice alt caracter nevalid într-un entity_id (ex: „/") devine „_".
-    """
-    number = mp.get("number", "") or mp.get("meteringPointId", "")[:12]
-    slug = number.lower().replace("-", "").replace(" ", "")
-    return re.sub(r"[^a-z0-9_]+", "_", slug).strip("_")
-
-
-def helper_index_entity_id(clc_pod: str, series: str) -> str:
-    """ID-ul helperului input_number din care se citește indexul de trimis.
-
-    Normalizat exact ca Home Assistant (slugify): litere mici, „/", „-" și
-    spațiile devin „_" (issue #10 — înainte seria rămânea neschimbată, ex:
-    „...ABC/1234/2022_index", iar helperul creat de utilizator nu era găsit).
-    """
-    return f"input_number.{slugify(f'{DOMAIN}_{clc_pod}_{series}_index')}"
-
-
-def _mp_device(crm: str, mp: dict) -> DeviceInfo:
-    """Device info per CRM per loc de consum (metering point).
-
-    Identic cu sensor.py — același identifier = aceeași intrare în device registry.
-    Exemplu: Nova Power & Gas (6085537) LC-00202600 Gaz
-    """
-    mp_number = mp.get("number", "?")
-    ut_label = _utility_label(mp)
-    return DeviceInfo(
-        identifiers={(DOMAIN, f"mp_{crm}_{_mp_slug(mp)}")},
-        name=f"Nova Power & Gas ({crm}) {mp_number} {ut_label}",
-        manufacturer="Ciprian Nicolae (cnecrea)",
-        model="Nova Power & Gas",
-        entry_type=DeviceEntryType.SERVICE,
-    )
+def _unique_id(crm: str, mp: dict) -> str:
+    return f"{DOMAIN}_{crm}_{mp_slug(mp)}_trimite_index"
 
 
 # ═══════════════════════════════════════════════
@@ -104,83 +57,56 @@ async def async_setup_entry(
     config_entry: ConfigEntry,
     async_add_entities: AddEntitiesCallback,
 ) -> None:
-    """Configurează butoanele pentru trimiterea autocitirilor.
-
-    Iterează prin TOATE conturile (principal + asociate) din accounts_data.
-    Creează un buton per loc de consum (metering point).
-    Dacă MP-ul are meters, butonul le folosește la submit.
-    Dacă NU are meters, butonul se creează oricum (sub device-ul LC).
-    """
+    """Un buton „Trimite index" per loc de consum activ, pentru toate conturile (principal + asociate)."""
     coordinator: NovaCoordinator = config_entry.runtime_data.coordinator
+    registru = er.async_get(hass)
 
-    # Verificare licență — fără licență, fără butoane
+    # Fără licență, fără butoane (cele create anterior ar rămâne „indisponibile" în registry)
     mgr = hass.data.get(DOMAIN, {}).get(LICENSE_DATA_KEY)
     if not mgr or not mgr.is_valid:
-        _LOGGER.debug("[Nova:Button] Licență invalidă — nu se creează butoane")
-        # Butoanele create anterior ar rămâne orfane („indisponibile") în registry
-        registru = er.async_get(hass)
-        for entry_reg in er.async_entries_for_config_entry(
-            registru, config_entry.entry_id
-        ):
+        _LOGGER.debug("[VreauLaNova] Licență invalidă — nu se creează butoane")
+        for entry_reg in er.async_entries_for_config_entry(registru, config_entry.entry_id):
             if entry_reg.domain == "button":
                 registru.async_remove(entry_reg.entity_id)
         return
 
-    data = coordinator.data or {}
-    accounts_data = data.get("accounts_data", {})
+    accounts_data = (coordinator.data or {}).get("accounts_data", {})
+    buttons: list[ButtonEntity] = [
+        TrimiteIndexButton(coordinator, crm, mp)
+        for crm, acct_data in accounts_data.items()
+        for mp in acct_data.get("metering_points", [])
+        if is_active_mp(mp)  # coordinatorul a scos deja locurile fără CLC/POD; verificare defensivă
+    ]
 
-    buttons: list[ButtonEntity] = []
-
-    for crm, acct_data in accounts_data.items():
-        metering_points = acct_data.get("metering_points", [])
-
-        for mp in metering_points:
-            # Un buton per MP — meter-ul e opțional (se ia primul dacă există)
-            buttons.append(
-                TrimiteIndexButton(coordinator, crm, mp)
-            )
-
+    _LOGGER.debug(
+        "[VreauLaNova] Se adaugă %d butoane „Trimite index” pentru %d conturi", len(buttons), len(accounts_data)
+    )
     if buttons:
-        _LOGGER.debug(
-            "[Nova:Button] Se adaugă %d butoane pentru %d conturi (entry_id=%s).",
-            len(buttons), len(accounts_data), config_entry.entry_id,
-        )
         async_add_entities(buttons)
 
 
 # ═══════════════════════════════════════════════
-# CLASĂ DE BAZĂ — PER LOC DE CONSUM
+# BUTON
 # ═══════════════════════════════════════════════
 
-class NovaBaseButton(CoordinatorEntity[NovaCoordinator], ButtonEntity):
-    """Bază pentru toate butoanele Nova — custom entity_id, device per MP.
-
-    CoordinatorEntity: disponibilitatea se reevaluează la fiecare actualizare
-    (înainte rămânea cea de la pornire — ex: contorul apărut ulterior).
-    """
+class TrimiteIndexButton(CoordinatorEntity[NovaCoordinator], ButtonEntity):
+    """Trimite autocitirea unui loc de consum la Nova; rezultatul apare ca notificare persistentă."""
 
     _attr_has_entity_name = False
+    _attr_attribution = ATTRIBUTION
 
-    def __init__(
-        self,
-        coordinator: NovaCoordinator,
-        crm: str,
-        mp: dict,
-    ) -> None:
+    def __init__(self, coordinator: NovaCoordinator, crm: str, mp: dict) -> None:
         super().__init__(coordinator)
-        self._coordinator = coordinator
         self._crm = crm
         self._mp = mp
-        self._mp_slug = _mp_slug(mp)
-        self._ut_short = _utility_short(mp)
-        self._ut_label = _utility_label(mp)
-        self._custom_entity_id: str | None = None
-
-    @property
-    def _license_valid(self) -> bool:
-        """Verifică dacă licența este validă (real-time)."""
-        mgr = self._coordinator.hass.data.get(DOMAIN, {}).get(LICENSE_DATA_KEY)
-        return mgr.is_valid if mgr else False
+        self._mp_id = mp.get("meteringPointId", "")
+        self._mp_slug = mp_slug(mp)
+        self._clc_pod = mp.get("specificIdForUtilityType", "") or ""
+        self._utility = mp.get("utilityType", "unknown")
+        self._attr_name = "Trimite index"
+        self._attr_unique_id = _unique_id(crm, mp)
+        self._attr_icon = "mdi:fire" if self._utility == "gas" else "mdi:flash"
+        self._custom_entity_id = f"button.{DOMAIN}_{crm}_{self._mp_slug}_trimite_index"
 
     @property
     def entity_id(self) -> str | None:
@@ -192,197 +118,176 @@ class NovaBaseButton(CoordinatorEntity[NovaCoordinator], ButtonEntity):
 
     @property
     def device_info(self) -> DeviceInfo:
-        return _mp_device(self._crm, self._mp)
+        return mp_device(self._crm, self._mp)
 
-
-# ═══════════════════════════════════════════════
-# BUTOANE
-# ═══════════════════════════════════════════════
-
-class TrimiteIndexButton(NovaBaseButton):
-    """Buton pentru trimiterea autocitirilor la Nova API.
-
-    Se creează UN buton per loc de consum (metering point).
-    Meter-ul se ia din coordinator data la runtime (nu la init).
-    Dacă MP-ul nu are meters, butonul apare dar e unavailable.
-    """
-
-    _attr_attribution = ATTRIBUTION
-
-    def __init__(
-        self,
-        coordinator: NovaCoordinator,
-        crm: str,
-        mp: dict,
-    ):
-        """Inițializare buton trimitere index — per MP."""
-        super().__init__(coordinator, crm, mp)
-
-        self._clc_pod = mp.get("specificIdForUtilityType", "")
-        self._utility = mp.get("utilityType", "unknown")
-
-        self._attr_name = "Trimite index"
-        self._attr_unique_id = f"{DOMAIN}_{crm}_{self._mp_slug}_trimite_index"
-        self._attr_icon = "mdi:fire" if self._utility == "gas" else "mdi:flash"
-
-        # Custom entity_id: button.vreaulanova_{crm}_{mp_slug}_trimite_index
-        self._custom_entity_id = (
-            f"button.{DOMAIN}_{crm}_{self._mp_slug}_trimite_index"
-        )
-
-    def _get_current_meter(self) -> dict | None:
-        """Obține primul meter din MP la runtime (din coordinator data).
-
-        Meter-ul poate apărea mai târziu (heavy refresh, self-readings fetch).
-        """
-        data = self._coordinator.data or {}
-        acct = data.get("accounts_data", {}).get(self._crm, {})
-        for mp in acct.get("metering_points", []):
-            if mp.get("meteringPointId") == self._mp.get("meteringPointId"):
-                meters = mp.get("meters", [])
-                if meters:
-                    return meters[0]
-        # Fallback: meters din MP-ul stocat la init
-        meters = self._mp.get("meters", [])
-        return meters[0] if meters else None
+    @property
+    def _license_valid(self) -> bool:
+        mgr = self.coordinator.hass.data.get(DOMAIN, {}).get(LICENSE_DATA_KEY)
+        return bool(mgr and mgr.is_valid)
 
     @property
     def available(self) -> bool:
-        """Butonul e disponibil dacă: licență validă + coordinator ok + meter prezent."""
-        if not self._license_valid or not self._coordinator.last_update_success:
-            return False
-        return self._get_current_meter() is not None
+        """Disponibil cât licența e validă: motivul unui refuz (perioadă închisă, lipsă helper) apare
+        în notificare, nu ca buton „Indisponibil" fără explicație."""
+        return self._license_valid and self.coordinator.last_update_success
+
+    def _current_mp(self) -> dict:
+        acct = ((self.coordinator.data or {}).get("accounts_data") or {}).get(self._crm, {})
+        for mp in acct.get("metering_points", []):
+            if mp.get("meteringPointId") == self._mp_id:
+                return mp
+        return self._mp
+
+    def _meter(self) -> dict | None:
+        meters = self._current_mp().get("meters") or []
+        return meters[0] if meters else None
 
     @property
     def extra_state_attributes(self) -> dict[str, Any]:
         """Helperul din care se citește indexul — ca utilizatorul să știe ce să creeze."""
-        meter = self._get_current_meter()
-        if not meter:
-            return {"Loc de consum": self._mp.get("number", "")}
-        return {
-            "Loc de consum": self._mp.get("number", ""),
-            "Serie contor": meter.get("series", ""),
-            "Helper index": helper_index_entity_id(self._clc_pod, meter.get("series", "")),
-        }
+        meter = self._meter()
+        app_info = (self.coordinator.data or {}).get("app_info") or {}
+        attrs: dict[str, Any] = {"Loc de consum": self._mp.get("number", ""), "CLC/POD": self._clc_pod}
+        if meter:
+            attrs["Serie contor"] = meter.get("series", "")
+            attrs["Helper index"] = helper_index_entity_id(self._clc_pod, meter.get("series", ""))
+        attrs["Perioadă de citire deschisă"] = "Da" if app_info.get("selfReadingsEnabled") else "Nu"
+        if app_info.get("selfReadingIntervalMessage"):
+            attrs["Interval autocitire"] = app_info["selfReadingIntervalMessage"]
+        return attrs
+
+    # ─────────────────────────────────────────
+    # Apăsare
+    # ─────────────────────────────────────────
+
+    def _notify(self, success: bool, message: str) -> None:
+        """Notificare persistentă (una per loc de consum; apăsarea următoare o înlocuiește)."""
+        number = self._mp.get("number", "")
+        title = (
+            f"Nova Power & Gas — index trimis ({number})" if success
+            else f"Nova Power & Gas — indexul nu a fost trimis ({number})"
+        )
+        persistent_notification.async_create(
+            self.hass, message, title=title, notification_id=notification_id(self._crm, self._mp)
+        )
+        (_LOGGER.info if success else _LOGGER.warning)("[VreauLaNova] Trimite index %s: %s", number, message)
 
     async def async_press(self) -> None:
-        """Trimite autocitirea la Nova API.
+        """Trimite autocitirea. Nu ridică excepții: fiecare rezultat devine o notificare persistentă."""
+        try:
+            await self._async_submit()
+        except Exception as err:  # noqa: BLE001 — utilizatorul trebuie să afle ce s-a întâmplat
+            _LOGGER.exception("[VreauLaNova] Eroare neașteptată la trimiterea indexului")
+            self._notify(False, f"Eroare neașteptată: {type(err).__name__}. Detalii în jurnalul Home Assistant.")
 
-        Nova folosește POST /self-readings/add cu payload:
-            utilityType, meteringPointNumber, meterSeries, meterCode,
-            newIndex, specificIdForUtilityType, currentIndex, unit,
-            accountName, [dialCode]
-
-        Dacă butonul aparține unui cont asociat (diferit de cel principal),
-        se face switch înainte de submit și switch înapoi după.
-        Orice eșec ridică HomeAssistantError → mesajul apare în interfață
-        (înainte erorile ajungeau doar în log și apăsarea părea reușită).
-        """
+    async def _async_submit(self) -> None:
+        number = self._mp.get("number", "?")
+        _LOGGER.debug("[VreauLaNova] Trimite index %s: apăsat (cont %s)", number, self._crm)
         if not self._license_valid:
-            raise HomeAssistantError("Licență invalidă — trimiterea indexului nu e posibilă.")
+            self._notify(False, "Licența integrării nu este validă — indexul nu poate fi trimis.")
+            return
 
-        # Verifică dacă suntem în perioada de transmitere autocitiri
-        data = self._coordinator.data or {}
+        api = self.coordinator.api
+        data = self.coordinator.data or {}
+
+        # 1. Perioada de autocitire — verificată acum la Nova (datele salvate pot avea o oră)
         app_info = data.get("app_info") or {}
-        if not app_info.get("selfReadingsEnabled", False):
-            raise HomeAssistantError(
-                "Nova nu permite autocitiri în această perioadă — butonul funcționează "
-                "doar când fereastra de transmitere este deschisă."
-            )
+        try:
+            app_info = await api.async_get_app_info() or app_info
+        except NovaApiError as err:
+            _LOGGER.debug("[VreauLaNova] /system/info indisponibil (%s) — se folosesc datele salvate", err)
+        if not app_info.get("selfReadingsEnabled"):
+            lines = ["Perioada de autocitire nu este deschisă acum la Nova."]
+            if app_info.get("selfReadingIntervalMessage"):
+                lines.append(app_info["selfReadingIntervalMessage"])
+            for ann in app_info.get("announcements") or []:
+                if isinstance(ann, dict) and ann.get("message"):
+                    lines.append(f"Anunț Nova: {ann['message']}")
+            self._notify(False, "\n\n".join(lines))
+            return
 
-        meter = self._get_current_meter()
+        # 2. Indexul din helperul input_number (seria vine din contorul cunoscut)
+        meter = self._meter()
         if not meter:
-            raise HomeAssistantError(
-                f"Nu există contor pentru locul de consum {self._mp.get('number', '?')}."
-            )
-
+            self._notify(False, f"Nova nu a trimis niciun contor pentru locul {number}. "
+                                "Încearcă după următoarea actualizare a integrării.")
+            return
         series = meter.get("series", "")
-
-        # Citește valoarea din helperul input_number (ID normalizat ca în HA — #10)
-        input_entity_id = helper_index_entity_id(self._clc_pod, series)
-        state = self.hass.states.get(input_entity_id)
+        helper = helper_index_entity_id(self._clc_pod, series)
+        state = self.hass.states.get(helper)
         if not state or state.state in ("unknown", "unavailable"):
-            raise HomeAssistantError(
-                f"Helperul {input_entity_id} nu există sau nu are valoare. "
-                "Creați un input_number cu acest ID și introduceți indexul."
-            )
-
+            self._notify(False, f"Nu există helperul `{helper}` sau nu are valoare.\n\n"
+                                "Creează-l din Setări → Dispozitive și servicii → Ajutoare → Număr, "
+                                "cu exact acest ID, și scrie în el indexul de trimis.")
+            return
         try:
             index_value = int(float(state.state))
-        except (ValueError, TypeError) as err:
-            raise HomeAssistantError(
-                f"Valoare invalidă în {input_entity_id}: {state.state}"
-            ) from err
+        except (ValueError, TypeError):
+            self._notify(False, f"Valoarea din `{helper}` nu este un număr: „{state.state}”.")
+            return
 
-        # Determinăm accountName din accounts_data
-        acct_data = data.get("accounts_data", {}).get(self._crm, {})
-        account_name = acct_data.get("account_name", "")
+        acct = (data.get("accounts_data") or {}).get(self._crm, {})
+        needs_switch = (api.crm_viewed_account or "") != self._crm
+        target = next(
+            (aa for aa in api.associated_accounts or [] if str(aa.get("accountNumber", "")).strip() == self._crm),
+            None,
+        )
+        if needs_switch and target is None:
+            self._notify(False, f"Contul asociat {self._crm} nu mai este disponibil în contul Nova — indexul nu a fost trimis.")
+            return
 
-        api = self._coordinator.api
-        current_crm = api.crm_viewed_account or ""
-        needs_switch = current_crm != self._crm
-        target_account = None
-        if needs_switch:
-            for aa in api.associated_accounts or []:
-                if str(aa.get("accountNumber", "")).strip() == self._crm:
-                    target_account = aa
-                    break
-            if target_account is None:
-                # Înainte: se trimitea „fără switch" — adică pe contul principal
-                raise HomeAssistantError(
-                    f"Contul asociat {self._crm} nu mai este disponibil — indexul nu a fost trimis."
-                )
-
-        # Construiește payload-ul Nova
-        payload = {
-            "utilityType": self._utility,
-            "meteringPointNumber": self._mp.get("number", ""),
-            "meterSeries": series,
-            "meterCode": meter.get("meterCode", ""),
-            "newIndex": index_value,
-            "specificIdForUtilityType": self._clc_pod,
-            "currentIndex": meter.get("currentIndex", 0),
-            "unit": meter.get("unit", ""),
-            "dialCode": meter.get("dialCode", ""),
-            "accountName": account_name,
-        }
-
-        # Comutarea de cont + trimiterea + revenirea se fac sub lacătul de cont:
-        # o actualizare a datelor în paralel comută și ea contul pe server.
+        # 3. Comutare cont (dacă e asociat) + contorul real + trimitere — sub lacătul de cont
         async with api.account_lock:
-            if needs_switch:
-                _LOGGER.debug("[Nova:Button] Switch la contul %s pentru submit", self._crm)
-                try:
-                    switched = await api.async_switch_account(target_account)
-                except NovaApiError as err:
-                    raise HomeAssistantError(
-                        f"Comutarea pe contul {self._crm} a eșuat: {err}"
-                    ) from err
-                if not switched:
-                    raise HomeAssistantError(
-                        f"Comutarea pe contul {self._crm} a eșuat — indexul nu a fost trimis."
-                    )
-
-            _LOGGER.info(
-                "[Nova:Button] Trimitere autocitire: cont=%s, clc_pod=%s, series=%s, "
-                "newIndex=%s, utility=%s",
-                self._crm, self._clc_pod, series, index_value, self._utility,
-            )
             try:
+                if needs_switch:
+                    _LOGGER.debug("[VreauLaNova] Trimite index %s: comutare pe contul %s", number, self._crm)
+                    await api.async_switch_account(target)
+
+                if meter.get("fromHistory"):
+                    # Contorul salvat e reconstruit din istoric: cerem acum contorul real (cu currentIndex
+                    # și meterCode la zi), exact cum face aplicația înainte de trimitere.
+                    fresh = await api.async_get_metering_points_self_readings()
+                    real = next((m for m in fresh if m.get("meteringPointId") == self._mp_id), {})
+                    meters = real.get("meters") or []
+                    meter = next((m for m in meters if m.get("series") == series), meters[0] if meters else None)
+                    if not meter:
+                        self._notify(False, f"Nova nu oferă acum contorul locului {number} pentru autocitire, "
+                                            "deși perioada este deschisă. Încearcă din nou mai târziu.")
+                        return
+                    series = meter.get("series", series)
+
+                payload = {
+                    "utilityType": self._utility,
+                    "meteringPointNumber": number,
+                    "specificIdForUtilityType": self._clc_pod,
+                    "meterSeries": series,
+                    "meterCode": meter.get("meterCode", ""),
+                    "newIndex": index_value,
+                    "currentIndex": meter.get("currentIndex", 0),
+                    "unit": meter.get("unit", ""),
+                    "accountName": acct.get("account_name", ""),
+                }
+                if meter.get("dialCode"):
+                    payload["dialCode"] = meter["dialCode"]
+                _LOGGER.info(
+                    "[VreauLaNova] Trimite index %s: cont %s, serie %s, index nou %s (index curent %s)",
+                    number, self._crm, series, index_value, payload["currentIndex"],
+                )
                 result = await api.async_submit_self_reading(payload)
             except NovaApiError as err:
-                raise HomeAssistantError(
-                    f"Nova a respins autocitirea {index_value} ({series}): {err}"
-                ) from err
+                reason = err.message or str(err)
+                self._notify(False, f"Nova a refuzat indexul **{index_value}** (contor {series}): {reason}")
+                return
             finally:
-                # Switch înapoi la contul principal
-                if needs_switch and not await self._coordinator._async_switch_to_primary():
-                    self._coordinator._session_on_other_account = True
+                if needs_switch and not await self.coordinator._async_switch_to_primary():
+                    self.coordinator._session_on_other_account = True
 
-        if not result:
-            raise HomeAssistantError(
-                f"Trimiterea autocitirii a eșuat pentru {series} (răspuns gol de la Nova)."
-            )
-
-        _LOGGER.info("[Nova:Button] Autocitire trimisă cu succes pentru %s.", series)
-        await self._coordinator.async_request_refresh()
+        unit = normalize_unit(meter.get("unit")) or ""
+        nova_message = result.get("message") if isinstance(result, dict) else None
+        self._notify(True, (
+            f"Indexul **{format_number(index_value)}{f' {unit}' if unit else ''}** a fost trimis pentru "
+            f"{utility_label(self._mp).lower()}, contor {series}, locul {number}, "
+            f"pe {dt_util.now().strftime('%d.%m.%Y, la %H:%M')}."
+            + (f"\n\nNova: {nova_message}" if nova_message else "")
+        ))
+        await self.coordinator.async_request_refresh()

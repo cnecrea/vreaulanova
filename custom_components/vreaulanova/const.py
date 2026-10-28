@@ -34,44 +34,51 @@ TOKEN_MAX_AGE = 2592000             # JWT Nova expiră la 30 zile (exp din răsp
 API_TIMEOUT = 30
 
 # ──────────────────────────────────────────────
-# URL-uri API — Backend Payload CMS
+# URL-uri API — myaccount-admin.nova-energy.ro (din octombrie 2026)
 # ──────────────────────────────────────────────
-API_BASE = "https://backend.nova-energy.ro/api"
+# Backend-ul vechi (backend.nova-energy.ro/api, Payload CMS) întoarce 404 la orice rută.
+# API-ul nou e cel folosit de myaccount.nova-energy.ro și de aplicația mobilă 5.x.
+# Răspunsurile au forma {"data": {...}}; listele sunt în data.<nume> (nu în „docs"),
+# cu excepția /contracts (paginat: docs, totalDocs, page …).
+API_BASE = "https://myaccount-admin.nova-energy.ro/api/v1"
 
-# Auth — /accounts/login/client returnează structura completă
-#         cu loggedInAccount.associatedAccounts (endpoint web)
-URL_LOGIN = f"{API_BASE}/accounts/login/client"
-URL_LOGOUT = f"{API_BASE}/accounts/logout"
-URL_ME = f"{API_BASE}/accounts/me"
-URL_SWITCH_ACCOUNT = f"{API_BASE}/accounts/switch"
+# Auth — /auth/login întoarce data.loggedInAccount (cu associatedAccounts), data.viewedAccount,
+# data.session {token, expireAt (epoch, 30 de zile)}. Contul vizualizat: POST /auth/switch-account
+# {accountId} + antetul X-Viewed-Account pe fiecare cerere (ca aplicația).
+URL_LOGIN = f"{API_BASE}/auth/login"
+URL_LOGOUT = f"{API_BASE}/auth/logout"
+URL_SWITCH_ACCOUNT = f"{API_BASE}/auth/switch-account"
 
-# App info (selfReadingsEnabled, selfReadingIntervalMessage)
-URL_APP_INFO = f"{API_BASE}/globals/app-info/general"
+# App info (selfReadingsEnabled, selfReadingIntervalMessage, announcements)
+URL_APP_INFO = f"{API_BASE}/system/info"
 
 # Metering points
 URL_METERING_POINTS = f"{API_BASE}/metering-points"
-URL_METERING_POINTS_SELF_READINGS = f"{API_BASE}/metering-points/self-readings"
+URL_METERING_POINTS_SELF_READINGS = f"{API_BASE}/metering-points/for-self-readings"
+URL_GAS_REVISIONS = f"{API_BASE}/metering-points/gas-revisions"
 # Consumption agreements: f"{API_BASE}/metering-points/{mp_id}/consumption-agreements"
 
-# Self readings
+# Self readings — GET = istoric (data.selfReadings), POST = trimitere autocitire
 URL_SELF_READINGS = f"{API_BASE}/self-readings"
-URL_SELF_READINGS_ADD = f"{API_BASE}/self-readings/add"
 
-# Invoices
+# Invoices (data.invoices + data.balance)
 URL_INVOICES = f"{API_BASE}/invoices"
 
-# Balances
-URL_BALANCES = f"{API_BASE}/balances"
+# Sold (total, electricity, gas, prosumer, prosumerDue, isProsumer)
+URL_BALANCES = f"{API_BASE}/dashboard/balance"
 
 # Contracts
 URL_CONTRACTS = f"{API_BASE}/contracts"
-URL_CONTRACTS_DELIVERY = f"{API_BASE}/contracts/invoice-delivery-type"
 
-# Payments
+# Payments (data.payments)
 URL_PAYMENTS = f"{API_BASE}/payments"
 
-# Accounts users
-URL_ACCOUNTS_USERS = f"{API_BASE}/accounts-users"
+# Raport consum și costuri (pe loc de consum: ultimele 12 luni, medii lunare)
+URL_REPORT_LOCATIONS = f"{API_BASE}/reports/consumption-costs/locations"
+URL_REPORT = f"{API_BASE}/reports/consumption-costs"
+
+# Antet pentru contul vizualizat (cont principal sau asociat)
+HEADER_VIEWED_ACCOUNT = "X-Viewed-Account"
 
 # ──────────────────────────────────────────────
 # Headers HTTP

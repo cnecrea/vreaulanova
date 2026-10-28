@@ -30,6 +30,7 @@ from .const import (
 )
 from . import _signature
 from .api import NovaApiClient
+from .helpers import mask_email
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -45,11 +46,7 @@ def _store_token(hass, username: str, api: NovaApiClient) -> None:
         return
     store = hass.data.setdefault(DOMAIN_TOKEN_STORE, {})
     store[username.lower()] = token_data
-    _LOGGER.debug(
-        "Token salvat în hass.data pentru %s (access=%s...).",
-        username,
-        token_data["access_token"][:8] if token_data.get("access_token") else "None",
-    )
+    _LOGGER.debug("[VreauLaNova] Token salvat în hass.data pentru %s.", mask_email(username))
 
 
 def _update_and_reload(
@@ -139,7 +136,8 @@ class NovaConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                     },
                 )
             else:
-                errors["base"] = "auth_failed"
+                # credențiale respinse vs. Nova indisponibil (rețea, server) — mesaje diferite
+                errors["base"] = "auth_failed" if self._api.auth_rejected else "cannot_connect"
 
         schema = vol.Schema(
             {
@@ -181,7 +179,7 @@ class NovaConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                     {**entry.data, "password": password, "token_data": api.export_token_data()},
                 )
                 return self.async_abort(reason="reauth_successful")
-            errors["base"] = "auth_failed"
+            errors["base"] = "auth_failed" if api.auth_rejected else "cannot_connect"
 
         return self.async_show_form(
             step_id="reauth_confirm",
@@ -437,7 +435,7 @@ class NovaOptionsFlow(config_entries.OptionsFlow):
                 )
                 return self.async_create_entry(data=dict(self.config_entry.options))
             else:
-                errors["base"] = "auth_failed"
+                errors["base"] = "auth_failed" if self._api.auth_rejected else "cannot_connect"
 
         current = self.config_entry.data
 

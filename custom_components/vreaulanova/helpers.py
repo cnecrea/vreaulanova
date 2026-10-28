@@ -1,597 +1,221 @@
-"""Funcții și constante utilitare pentru integrarea Nova Power & Gas."""
+"""Funcții comune pentru senzorii, butoanele și diagnosticul Nova Power & Gas.
+
+Device-ul și ID-urile unui loc de consum se construiesc DOAR aici, ca senzorii și butoanele
+să ajungă sub același device (înainte, sensor.py și button.py aveau fiecare copia lor).
+"""
 
 from __future__ import annotations
 
-import hashlib
-import hmac
-from datetime import datetime
+import logging
+import re
+from datetime import date, datetime
 from typing import Any
 
-from homeassistant.helpers.selector import SelectOptionDict
-from homeassistant.util import dt as dt_util
+from homeassistant.config_entries import ConfigEntry
+from homeassistant.const import UnitOfEnergy, UnitOfVolume
+from homeassistant.core import HomeAssistant
+from homeassistant.helpers import device_registry as dr, entity_registry as er
+from homeassistant.helpers.device_registry import DeviceEntryType, DeviceInfo
+from homeassistant.util import slugify
 
 from .const import DOMAIN
 
+_LOGGER = logging.getLogger(__name__)
 
-# ══════════════════════════════════════════════
-# Mapping-uri luni și tipuri citire
-# ══════════════════════════════════════════════
-
-MONTHS_EN_RO: dict[str, str] = {
-    "January": "ianuarie",
-    "February": "februarie",
-    "March": "martie",
-    "April": "aprilie",
-    "May": "mai",
-    "June": "iunie",
-    "July": "iulie",
-    "August": "august",
-    "September": "septembrie",
-    "October": "octombrie",
-    "November": "noiembrie",
-    "December": "decembrie",
-}
-
-MONTHS_NUM_RO: dict[int, str] = {
-    1: "ianuarie",
-    2: "februarie",
-    3: "martie",
-    4: "aprilie",
-    5: "mai",
-    6: "iunie",
-    7: "iulie",
-    8: "august",
-    9: "septembrie",
-    10: "octombrie",
-    11: "noiembrie",
-    12: "decembrie",
-}
-
-READING_TYPE_MAP: dict[str, str] = {
-    "01": "Citire distribuitor",
-    "02": "Autocitire",
-    "03": "Estimare",
-}
-
-# ══════════════════════════════════════════════
-# Mapping-uri orașe
-# ══════════════════════════════════════════════
-COUNTY_CODE_MAP: dict[str, str] = {
-    "AB": "Alba",
-    "AR": "Arad",
-    "AG": "Argeș",
-    "BC": "Bacău",
-    "BH": "Bihor",
-    "BN": "Bistrița-Năsăud",
-    "BT": "Botoșani",
-    "BR": "Brăila",
-    "BV": "Brașov",
-    "B": "București",
-    "BZ": "Buzău",
-    "CS": "Caraș-Severin",
-    "CL": "Călărași",
-    "CJ": "Cluj",
-    "CT": "Constanța",
-    "CV": "Covasna",
-    "DB": "Dâmbovița",
-    "DJ": "Dolj",
-    "GL": "Galați",
-    "GR": "Giurgiu",
-    "GJ": "Gorj",
-    "HR": "Harghita",
-    "HD": "Hunedoara",
-    "IL": "Ialomița",
-    "IS": "Iași",
-    "IF": "Ilfov",
-    "MM": "Maramureș",
-    "MH": "Mehedinți",
-    "MS": "Mureș",
-    "NT": "Neamț",
-    "OT": "Olt",
-    "PH": "Prahova",
-    "SM": "Satu Mare",
-    "SJ": "Sălaj",
-    "SB": "Sibiu",
-    "SV": "Suceava",
-    "TR": "Teleorman",
-    "TM": "Timiș",
-    "TL": "Tulcea",
-    "VS": "Vaslui",
-    "VL": "Vâlcea",
-    "VN": "Vrancea",
-}
-
-# ══════════════════════════════════════════════
-# Mapping-uri utilități și unități de măsură
-# ══════════════════════════════════════════════
-
-UTILITY_TYPE_LABEL: dict[str, str] = {
-    "electric": "Energie electrică",
-    "gas": "Gaze naturale",
-}
-
-UTILITY_TYPE_SENSOR_LABEL: dict[str, tuple[str, str, str, str]] = {
-    "electric": ("Energie electrică", "Index energie electrică", "mdi:lightning-bolt", "index_energie_electrica"),
-    "gas": ("Gaze naturale", "Index gaze naturale", "mdi:gauge", "index_gaze_naturale"),
-}
-
-PORTFOLIO_LABEL: dict[str, str] = {
-    "GN": "Gaze naturale",
-    "EE": "Energie electrică",
-}
-
-UNIT_NORMALIZE: dict[str, str] = {
-    "MC": "m³",
-    "M3": "m³",
-    "m3": "m³",
-    "KWH": "kWh",
-    "kwh": "kWh",
-    "MWH": "MWh",
-    "mwh": "MWh",
-}
-
-CONVENTION_MONTH_MAPPING: dict[str, str] = {
-    "valueMonth1": "ianuarie", "valueMonth2": "februarie", "valueMonth3": "martie",
-    "valueMonth4": "aprilie", "valueMonth5": "mai", "valueMonth6": "iunie",
-    "valueMonth7": "iulie", "valueMonth8": "august", "valueMonth9": "septembrie",
-    "valueMonth10": "octombrie", "valueMonth11": "noiembrie", "valueMonth12": "decembrie",
-}
+MONTHS_RO_LOWER = [
+    "ianuarie", "februarie", "martie", "aprilie", "mai", "iunie",
+    "iulie", "august", "septembrie", "octombrie", "noiembrie", "decembrie",
+]
 
 
 # ══════════════════════════════════════════════
-# Mapping-uri traducere atribute API → română
+# Locul de consum (metering point)
 # ══════════════════════════════════════════════
 
-INVOICE_BALANCE_KEY_MAP: dict[str, str] = {
-    "balance": "Sold",
-    "total": "Total",
-    "totalBalance": "Sold total",
-    "invoiceValue": "Valoare factură",
-    "issuedValue": "Valoare emisă",
-    "balanceValue": "Sold rămas",
-    "paidValue": "Sumă achitată",
-    "maturityDate": "Data scadenței",
-    "invoiceNumber": "Număr factură",
-    "emissionDate": "Data emiterii",
-    "paymentDate": "Data plății",
-    "currency": "Monedă",
-    "status": "Stare",
-    "type": "Tip",
-    "accountContract": "Cod încasare",
-    "refund": "Rambursare disponibilă",
-    "date": "Data sold",
-    "refundInProcess": "Rambursare în curs",
-    "hasGuarantee": "Garanție activă",
-    "hasUnpaidGuarantee": "Garanție neachitată",
-    "balancePay": "Sold de plată",
-    "refundDocumentsRequired": "Documente rambursare necesare",
-    "isAssociation": "Asociație",
-}
-
-INVOICE_BALANCE_MONEY_KEYS: set[str] = {
-    "balance",
-    "total",
-    "totalBalance",
-    "invoiceValue",
-    "issuedValue",
-    "balanceValue",
-    "paidValue",
-}
+def utility_short(mp: dict) -> str:
+    """Eticheta scurtă a utilității (folosită în ID-uri): gaz / electricitate."""
+    ut = mp.get("utilityType", "")
+    return {"gas": "gaz", "electricity": "electricitate"}.get(ut, ut)
 
 
-# ══════════════════════════════════════════════
-# Funcții de formatare
-# ══════════════════════════════════════════════
-
-def format_ron(value: float) -> str:
-    """Formatează o valoare numerică în format românesc (1.234,56)."""
-    formatted = f"{value:,.2f}"
-    return formatted.replace(",", "X").replace(".", ",").replace("X", ".")
+def utility_label(mp: dict) -> str:
+    """Eticheta afișată a utilității: Gaz / Energie Electrică."""
+    ut = mp.get("utilityType", "")
+    return {"gas": "Gaz", "electricity": "Energie Electrică"}.get(ut, ut)
 
 
-def format_number_ro(value: float | int | str) -> str:
-    """Formatează un număr cu separatorul zecimal românesc (virgulă).
+def id_part(value: Any) -> str:
+    """Fragment valid de entity_id: litere mici, cifre și „_" (valorile valide rămân neschimbate)."""
+    return re.sub(r"[^a-z0-9_]+", "_", str(value).lower()).strip("_")
 
-    Exemple:
-        4.029   → '4,029'
-        124.91  → '124,91'
-        11.9    → '11,9'
-        0.424   → '0,424'
-        100     → '100'
-        100.0   → '100'
+
+def mp_slug(mp: dict) -> str:
+    """Slug-ul locului de consum: LC-00202600 → lc00202600 (în entity_id și în identificatorul device-ului)."""
+    number = mp.get("number", "") or mp.get("meteringPointId", "")[:12]
+    return id_part(number.lower().replace("-", "").replace(" ", ""))
+
+
+def mp_device(crm: str, mp: dict) -> DeviceInfo:
+    """Device-ul unui loc de consum: „Nova Power & Gas (6085537) LC-00202600 Gaz"."""
+    return DeviceInfo(
+        identifiers={(DOMAIN, f"mp_{crm}_{mp_slug(mp)}")},
+        name=f"Nova Power & Gas ({crm}) {mp.get('number', '?')} {utility_label(mp)}",
+        manufacturer="Ciprian Nicolae (cnecrea)",
+        model="Nova Power & Gas",
+        entry_type=DeviceEntryType.SERVICE,
+    )
+
+
+def is_active_mp(mp: dict) -> bool:
+    """Loc de consum activ = are cod CLC/POD (specificIdForUtilityType).
+
+    Nova întoarce și locuri fără CLC/POD (vechi sau neactivate): fără contract activ,
+    facturi, contor sau autocitiri — pentru ele nu se poate trimite index.
     """
+    return bool((mp.get("specificIdForUtilityType") or "").strip())
+
+
+def remove_inactive_devices(hass: HomeAssistant, entry: ConfigEntry, accounts_data: dict) -> int:
+    """Scoate device-urile locurilor fără CLC/POD (și entitățile lor) create de versiunile anterioare.
+
+    Locurile inactive nu mai primesc senzori; fără curățare, device-ul lor ar rămâne în registry cu
+    entități orfane („Indisponibil"). Întoarce câte device-uri au fost scoase.
+    """
+    dev_reg = dr.async_get(hass)
+    ent_reg = er.async_get(hass)
+    removed = 0
+    for crm, acct in (accounts_data or {}).items():
+        for mp in acct.get("inactive_metering_points") or []:
+            device = dev_reg.async_get_device(identifiers={(DOMAIN, f"mp_{crm}_{mp_slug(mp)}")})
+            if device is None or entry.entry_id not in device.config_entries:
+                continue
+            entities = [
+                e for e in er.async_entries_for_device(ent_reg, device.id, include_disabled_entities=True)
+                if e.config_entry_id == entry.entry_id
+            ]
+            for ent in entities:
+                ent_reg.async_remove(ent.entity_id)
+            dev_reg.async_update_device(device.id, remove_config_entry_id=entry.entry_id)
+            removed += 1
+            _LOGGER.info(
+                "[VreauLaNova] Locul %s (cont %s) nu are cod CLC/POD la Nova — device-ul și cele %d entități ale lui au fost scoase",
+                mp.get("number", "?"), crm, len(entities),
+            )
+    return removed
+
+
+def helper_index_entity_id(clc_pod: str, series: str) -> str:
+    """ID-ul helperului input_number din care se citește indexul de trimis.
+
+    Normalizat exact ca Home Assistant (slugify) — issue #10: seria cu „/" sau „-".
+    """
+    return f"input_number.{slugify(f'{DOMAIN}_{clc_pod}_{series}_index')}"
+
+
+def notification_id(crm: str, mp: dict) -> str:
+    """ID-ul notificării persistente a butonului „Trimite index" (una per loc de consum)."""
+    return f"{DOMAIN}_index_{id_part(crm)}_{mp_slug(mp)}"
+
+
+# ══════════════════════════════════════════════
+# Unități de măsură
+# ══════════════════════════════════════════════
+
+def normalize_unit(raw: Any) -> str | None:
+    """Unitatea din API (m³, m3, MC, kwh, KWH, MWh) → „m³" / „kWh" / „MWh"."""
+    unit = str(raw or "").strip().lower().replace("³", "3")
+    if unit in ("m3", "mc"):
+        return "m³"
+    if unit == "kwh":
+        return "kWh"
+    if unit == "mwh":
+        return "MWh"
+    return None
+
+
+def ha_unit(mp: dict, raw_unit: Any = None) -> str | None:
+    """Unitatea Home Assistant: din unitatea primită, altfel după utilitate (gaz → m³, electricitate → kWh)."""
+    unit = normalize_unit(raw_unit) or ("kWh" if mp.get("utilityType") == "electricity" else "m³")
+    return {
+        "m³": UnitOfVolume.CUBIC_METERS,
+        "kWh": UnitOfEnergy.KILO_WATT_HOUR,
+        "MWh": UnitOfEnergy.MEGA_WATT_HOUR,
+    }.get(unit)
+
+
+# ══════════════════════════════════════════════
+# Date, sume, perioade
+# ══════════════════════════════════════════════
+
+def parse_date(value: Any) -> date | None:
+    """„dd.mm.yyyy", „yyyy-mm-dd" sau ISO cu oră → date; None dacă nu se poate."""
+    text = str(value or "").strip()
+    for fmt, size in (("%d.%m.%Y", 10), ("%Y-%m-%d", 10)):
+        try:
+            return datetime.strptime(text[:size], fmt).date()
+        except ValueError:
+            continue
+    return None
+
+
+def format_date_ro(value: Any) -> str:
+    """Data în română: „4 martie 2026" (sau textul primit, dacă nu e o dată)."""
+    if not value:
+        return "N/A"
+    parsed = parse_date(value)
+    if not parsed:
+        return str(value)
+    return f"{parsed.day} {MONTHS_RO_LOWER[parsed.month - 1]} {parsed.year}"
+
+
+def format_amount(value: Any) -> str:
+    """Suma în format românesc: 2.675,47 lei."""
+    try:
+        num = float(value)
+    except (ValueError, TypeError):
+        return "0,00 lei"
+    return f"{num:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".") + " lei"
+
+
+def format_number(value: Any) -> str:
+    """Număr cu virgulă zecimală, fără zecimale inutile: 98,39 / 120."""
     try:
         num = float(value)
     except (ValueError, TypeError):
         return str(value)
-    if num == int(num):
-        return str(int(num))
-    text = str(num)
-    return text.replace(".", ",")
+    return str(int(num)) if num == int(num) else f"{num:.2f}".rstrip("0").replace(".", ",")
 
 
-def format_invoice_due_message(display_value: float, raw_date: str, date_format: str = "%d.%m.%Y") -> str:
-    """Formatează mesajul de scadență pentru o factură.
-
-    Returnează un mesaj de tip:
-    - „Restanță de X lei, termen depășit cu N zile"
-    - „De achitat astăzi: X lei"
-    - „Sumă de X lei scadentă pe luna LUNA (N zile)"
-
-    Ridică ValueError dacă data nu poate fi parsată.
-    """
-    parsed_date = datetime.strptime(raw_date, date_format)
-    month_name_en = parsed_date.strftime("%B")
-    month_name_ro = MONTHS_EN_RO.get(month_name_en, "necunoscut")
-    days_until_due = (parsed_date.date() - dt_util.now().date()).days
-
-    if days_until_due < 0:
-        day_unit = "zi" if abs(days_until_due) == 1 else "zile"
-        return f"Restanță de {format_ron(display_value)} lei, termen depășit cu {abs(days_until_due)} {day_unit}"
-    if days_until_due == 0:
-        return f"De achitat astăzi, {dt_util.now().strftime('%d.%m.%Y')}: {format_ron(display_value)} lei"
-    day_unit = "zi" if days_until_due == 1 else "zile"
-    return f"Sumă de {format_ron(display_value)} lei scadentă pe luna {month_name_ro} ({days_until_due} {day_unit})"
+def to_float(value: Any) -> float | None:
+    """Sumă din API (număr sau text numeric) → float; None dacă lipsește."""
+    try:
+        return float(value)
+    except (ValueError, TypeError):
+        return None
 
 
-# ══════════════════════════════════════════════
-# Funcții de autentificare
-# ══════════════════════════════════════════════
+def period_label(period: str) -> str:
+    """„2026-09" → „septembrie 2026"."""
+    try:
+        year, month = (int(x) for x in str(period).split("-")[:2])
+        return f"{MONTHS_RO_LOWER[month - 1]} {year}"
+    except (ValueError, IndexError):
+        return str(period)
+
+
+def days_word(n: int) -> str:
+    """„1 zi", „2 zile", „20 de zile" (cu „de" de la 20 în sus, ca în română)."""
+    n = abs(n)
+    if n == 1:
+        return "1 zi"
+    return f"{n} {'de ' if n % 100 >= 20 or (n and n % 100 == 0) else ''}zile"
+
 
 def mask_email(email: str) -> str:
-    """Mascarea adresei de email: a*****b@gmail.com.
-
-    Păstrează primul și ultimul caracter din local part,
-    înlocuiește restul cu asteriscuri. Domeniul rămâne vizibil.
-    Dacă local part are 1-2 caractere, mascarea e minimală.
-    """
+    """Email mascat pentru jurnal și diagnostic: i*********u@yahoo.com."""
     if not email or "@" not in email:
-        return email or "—"
-    local, domain = email.rsplit("@", 1)
-    if len(local) <= 1:
-        masked = local
-    elif len(local) == 2:
-        masked = f"{local[0]}*"
-    else:
-        masked = f"{local[0]}{'*' * (len(local) - 2)}{local[-1]}"
-    return f"{masked}@{domain}"
-
-
-def generate_verify_hmac(username: str, secret: str) -> str:
-    """Generează semnătura HMAC-MD5 pentru câmpul verify din mobile-login.
-
-    Nova nu utilizează verificarea HMAC, deci se returnează șirul gol.
-    """
-    return ""
-
-
-# ══════════════════════════════════════════════
-# Funcții pentru config flow (selecție contracte)
-# ══════════════════════════════════════════════
-
-def build_address_consum(address_obj: dict) -> str:
-    """Construiește adresa completă formatată corect pentru România."""
-    if not isinstance(address_obj, dict):
-        return ""
-
-    def safe_str(value: Any) -> str:
-        return str(value).strip() if value else ""
-
-    def clean_parentheses(text: str) -> str:
-        """Elimină orice conținut de tip '(XX)' din text."""
-        if "(" in text:
-            text = text.split("(")[0]
-        return " ".join(text.split())
-
-    parts: list[str] = []
-
-    # ─────────────────────────────
-    # Stradă
-    # ─────────────────────────────
-    street_obj = address_obj.get("street")
-    if isinstance(street_obj, dict):
-
-        street_type = safe_str(
-            (street_obj.get("streetType") or {}).get("label")
-        )
-        street_name = safe_str(street_obj.get("streetName"))
-
-        full_street = " ".join(
-            filter(None, [street_type, street_name])
-        ).strip()
-
-        if full_street:
-            # Title doar pe stradă, nu pe tot textul
-            full_street = " ".join(word.capitalize() for word in full_street.split())
-
-            nr = safe_str(address_obj.get("streetNumber"))
-            if nr:
-                parts.append(f"{full_street} {nr}")
-            else:
-                parts.append(full_street)
-
-    # Apartament
-    apartment = safe_str(address_obj.get("apartment"))
-    if apartment and apartment != "0":
-        parts.append(f"ap. {apartment}")
-
-    # ─────────────────────────────
-    # Localitate + județ
-    # ─────────────────────────────
-    locality_obj = address_obj.get("locality")
-    if isinstance(locality_obj, dict):
-
-        raw_city = clean_parentheses(
-            safe_str(locality_obj.get("localityName"))
-        )
-
-        city = raw_city.strip()
-
-        county_code = safe_str(locality_obj.get("countyCode")).upper()
-        county_name = COUNTY_CODE_MAP.get(county_code)
-
-        if city:
-            if county_name:
-                parts.append(f"{city}, jud. {county_name}")
-            else:
-                parts.append(city)
-
-    return ", ".join(parts)
-
-def build_contract_options(metering_points: list[dict]) -> list[SelectOptionDict]:
-    """Construiește lista de opțiuni pentru selectorul de locuri de consum.
-
-    Nova: cheia primară este specificIdForUtilityType (CLC/POD) din metering-points,
-    NU contractId din /contracts (care nu se potrivește între endpoint-uri).
-
-    Args:
-        metering_points: Lista de metering-point docs din /metering-points API.
-    """
-    options: list[SelectOptionDict] = []
-    seen: set[str] = set()
-
-    def safe_str(value: Any) -> str:
-        return str(value).strip() if value else ""
-
-    for mp in metering_points or []:
-        if not isinstance(mp, dict):
-            continue
-
-        # CLC/POD este cheia primară
-        clc_pod = safe_str(mp.get("specificIdForUtilityType"))
-        if not clc_pod or clc_pod in seen:
-            continue
-
-        seen.add(clc_pod)
-
-        # Adresa — direct din metering-point
-        address = safe_str(mp.get("address")) or "Fără adresă"
-
-        # Tip utilitate
-        utility = safe_str(mp.get("utilityType"))
-        utility_label = {
-            "electricity": "Energie electrică",
-            "electric": "Energie electrică",
-            "gas": "Gaze naturale",
-        }.get(utility, utility)
-
-        # Număr punct de măsurare
-        mp_number = safe_str(mp.get("number"))
-
-        # Label final: adresă + CLC/POD + tip utilitate
-        label = f"{address}"
-        if utility_label:
-            label += f" ({utility_label})"
-        label += f" — {clc_pod}"
-
-        options.append(
-            SelectOptionDict(
-                value=clc_pod,
-                label=label,
-            )
-        )
-
-    options.sort(key=lambda x: x["label"].lower())
-
-    return options
-
-
-def extract_all_contracts(metering_points: list[dict]) -> list[str]:
-    """Extrage toate CLC/POD-urile unice din metering-points.
-
-    Nova: cheia primară este specificIdForUtilityType (CLC/POD).
-    """
-    result: list[str] = []
-    for mp in metering_points:
-        if isinstance(mp, dict):
-            clc_pod = (mp.get("specificIdForUtilityType") or "").strip()
-            if clc_pod and clc_pod not in result:
-                result.append(clc_pod)
-    return result
-
-
-def build_contract_metadata(
-    metering_points: list[dict],
-    contracts: list[dict] | None = None,
-    crm_account_number: str = "",
-    crm_map: dict[str, str] | None = None,
-) -> dict[str, dict]:
-    """Construiește un dict cu metadatele relevante per loc de consum (CLC/POD).
-
-    Nova: cheia primară este specificIdForUtilityType (CLC/POD) din metering-points.
-    Contractele se asociază prin utilityType (best-effort match).
-
-    Returnează: {CLC_POD: {
-        "utility_type": "electricity"|"gas",
-        "is_collective": bool,
-        "metering_point_number": str,  # number din metering-point
-        "meter_series": [str, ...],    # seria fiecărui contor
-        "contract_id": str|None,       # contractId din /contracts (via utilityType match)
-        "contract_number": str|None,   # number din /contracts
-        "address": str,
-        "crm_account_number": str,     # CRM-ul sub care e acest metering-point
-    }}
-    """
-    metadata: dict[str, dict] = {}
-
-    # Construiește index contracte pe utilityType (pentru matching)
-    contracts_by_utility: dict[str, list[dict]] = {}
-    for c in contracts or []:
-        if not isinstance(c, dict):
-            continue
-        ut = (c.get("utilityType") or "").strip()
-        if ut:
-            contracts_by_utility.setdefault(ut, []).append(c)
-
-    for mp in metering_points or []:
-        if not isinstance(mp, dict):
-            continue
-        clc_pod = (mp.get("specificIdForUtilityType") or "").strip()
-        if not clc_pod:
-            continue
-
-        utility_type = (mp.get("utilityType") or "").strip()
-        is_collective = (
-            mp.get("contractType", "").lower() == "collective"
-            or mp.get("isCollectiveContract") is True
-        )
-
-        # Extrage meter_series din meters[]
-        meter_series = []
-        for meter in mp.get("meters", []):
-            if isinstance(meter, dict):
-                series = (meter.get("series") or "").strip()
-                if series:
-                    meter_series.append(series)
-
-        # Match contract via utilityType (best-effort)
-        matched_contract_id = None
-        matched_contract_number = None
-        matching_contracts = contracts_by_utility.get(utility_type, [])
-        if len(matching_contracts) == 1:
-            matched_contract_id = matching_contracts[0].get("contractId")
-            matched_contract_number = matching_contracts[0].get("number")
-        elif len(matching_contracts) > 1:
-            # Ambiguu — nu putem determina, luăm primul
-            matched_contract_id = matching_contracts[0].get("contractId")
-            matched_contract_number = matching_contracts[0].get("number")
-
-        metadata[clc_pod] = {
-            "utility_type": utility_type,
-            "is_collective": is_collective,
-            "metering_point_number": (mp.get("number") or "").strip(),
-            "meter_series": meter_series,
-            "contract_id": matched_contract_id,
-            "contract_number": matched_contract_number,
-            "address": (mp.get("address") or "").strip(),
-            "crm_account_number": (crm_map or {}).get(clc_pod, crm_account_number),
-        }
-
-    return metadata
-
-
-def resolve_selection(
-    select_all: bool,
-    selected: list[str],
-    metering_points: list[dict],
-) -> list[str]:
-    """Returnează lista finală de locuri de consum selectate (CLC/POD)."""
-    if select_all:
-        return extract_all_contracts(metering_points)
-    return selected
-
-
-# ══════════════════════════════════════════════
-# Constante și helperi pentru butoane (trimitere index)
-# ══════════════════════════════════════════════
-
-# Mapare utility_type → configurație buton
-# utility_type "gas" = Gaz, "electric" = Electricitate
-UTILITY_BUTTON_CONFIG: dict[str, dict[str, str]] = {
-    "gas": {
-        "suffix": "trimite_index_gaz",
-        "label": "Trimite index gaz",
-        "icon": "mdi:fire",
-        "input_number": "input_number.gas_meter_reading",
-        "translation_key": "trimite_index_gaz",
-    },
-    "electric": {
-        "suffix": "trimite_index_energie_electrica",
-        "label": "Trimite index energie electrică",
-        "icon": "mdi:flash",
-        "input_number": "input_number.energy_meter_reading",
-        "translation_key": "trimite_index_energie_electrica",
-    },
-}
-
-# Fallback pentru contracte individuale (detectare din unitatea de măsură)
-UNIT_TO_UTILITY: dict[str, str] = {
-    "m3": "gas",
-    "mc": "gas",
-    "kwh": "electric",
-}
-
-
-def detect_utility_type_individual(coordinator_data: dict | None) -> str:
-    """Detectează utility_type pentru un contract individual din datele coordinator.
-
-    Folosește unitatea de măsură din graphic_consumption (um).
-    Returnează "gas" ca fallback.
-    """
-    if not coordinator_data:
-        return "gas"
-    um = coordinator_data.get("um", "m3")
-    return UNIT_TO_UTILITY.get(um.lower(), "gas")
-
-
-def get_subcontract_utility_type(
-    subcontracts_list: list[dict] | None, sc_code: str
-) -> str | None:
-    """Extrage utility_type pentru un subcontract din lista de subcontracte.
-
-    Nova folosește 'contractId'.
-    """
-    if not subcontracts_list or not isinstance(subcontracts_list, list):
-        return None
-    for s in subcontracts_list:
-        if isinstance(s, dict) and s.get("contractId") == sc_code:
-            return s.get("utilityType")
-    return None
-
-
-def get_meter_data(coordinator_data: dict | None, contract_id: str, is_subcontract: bool = False) -> dict | None:
-    """Obține datele meter_index pentru un contract sau subcontract.
-
-    Args:
-        coordinator_data: Dicționarul complet de date din coordinator.
-        contract_id: Codul de contract / subcontract.
-        is_subcontract: True dacă se caută în subcontracts_meter_index.
-
-    Returns:
-        Dicționarul meter_index sau None.
-    """
-    if not coordinator_data:
-        return None
-    if is_subcontract:
-        smi = coordinator_data.get("subcontracts_meter_index")
-        if smi and isinstance(smi, dict):
-            return smi.get(contract_id)
-        return None
-    return coordinator_data.get("meter_index")
-
-
-def extract_ablbelnr(meter_data: dict | None) -> str | None:
-    """Extrage ablbelnr (ID intern contor) din datele meter_index.
-
-    Parcurge devices → indexes și returnează primul ablbelnr găsit.
-    """
-    if not meter_data or not isinstance(meter_data, dict):
-        return None
-    devices = meter_data.get("indexDetails", {}).get("devices", [])
-    for device in devices:
-        indexes = device.get("indexes", [])
-        if indexes:
-            ablbelnr = indexes[0].get("ablbelnr")
-            if ablbelnr:
-                return ablbelnr
-    return None
+        return "***"
+    local, domain = email.split("@", 1)
+    if len(local) <= 2:
+        return f"{local[0]}*@{domain}"
+    return f"{local[0]}{'*' * (len(local) - 2)}{local[-1]}@{domain}"
