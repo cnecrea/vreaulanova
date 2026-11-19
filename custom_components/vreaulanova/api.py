@@ -341,10 +341,10 @@ class NovaApiClient:
                     method, url, headers=self._auth_headers(), params=params,
                     json=body, timeout=self._timeout,
                 ) as resp:
-                    if resp.status == 200:
+                    if resp.status in (200, 201):
                         result = await resp.json(content_type=None)
                         _LOGGER.debug(
-                            "[VreauLaNova] %s %s → 200 (%.2fs)", method, path, time.monotonic() - started
+                            "[VreauLaNova] %s %s → %s (%.2fs)", method, path, resp.status, time.monotonic() - started
                         )
                         return result
                     status = resp.status
