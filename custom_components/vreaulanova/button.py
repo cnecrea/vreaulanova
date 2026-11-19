@@ -246,15 +246,45 @@ class TrimiteIndexButton(CoordinatorEntity[NovaCoordinator], ButtonEntity):
                 if meter.get("fromHistory"):
                     # Contorul salvat e reconstruit din istoric: cerem acum contorul real (cu currentIndex
                     # și meterCode la zi), exact cum face aplicația înainte de trimitere.
+                    history_meter = meter
                     fresh = await api.async_get_metering_points_self_readings()
-                    real = next((m for m in fresh if m.get("meteringPointId") == self._mp_id), {})
+                    real = next(
+                        (
+                            m for m in fresh
+                            if str(m.get("meteringPointId", "")).strip() == str(self._mp_id).strip()
+                            or str(m.get("meteringPointNumber", "")).strip() == str(number).strip()
+                            or (self._clc_pod and m.get("specificIdForUtilityType") == self._clc_pod)
+                        ),
+                        {},
+                    )
                     meters = real.get("meters") or []
-                    meter = next((m for m in meters if m.get("series") == series), meters[0] if meters else None)
-                    if not meter:
-                        self._notify(False, f"Nova nu oferă acum contorul locului {number} pentru autocitire, "
-                                            "deși perioada este deschisă. Încearcă din nou mai târziu.")
-                        return
-                    series = meter.get("series", series)
+                    fresh_meter = next((m for m in meters if m.get("series") == series), meters[0] if meters else None)
+                    if fresh_meter:
+                        meter = fresh_meter
+                        series = meter.get("series", series)
+                    else:
+                        _LOGGER.warning(
+                            "[VreauLaNova] Trimite index %s: /for-self-readings nu a returnat contorul "
+                            "(răspuns: %s); se completează datele din istoric (/self-readings).",
+                            number, real or fresh,
+                        )
+                        hist_list = await api.async_get_self_readings()
+                        last_hist = next(
+                            (
+                                h for h in hist_list
+                                if str(h.get("meteringPointNo", "")).strip() == str(number).strip()
+                                or (self._clc_pod and h.get("meteringPointCode") == self._clc_pod)
+                                or (series and h.get("meterSeries") == series)
+                            ),
+                            {},
+                        )
+                        meter = {
+                            **history_meter,
+                            "meterCode": history_meter.get("meterCode") or last_hist.get("meterCode", ""),
+                            "dialCode": history_meter.get("dialCode") or last_hist.get("dialCode", ""),
+                            "unit": history_meter.get("unit") or last_hist.get("unit", "MC"),
+                            "currentIndex": history_meter.get("currentIndex") or last_hist.get("newIndex", 0),
+                        }
 
                 payload = {
                     "utilityType": self._utility,
